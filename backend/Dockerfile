@@ -1,16 +1,21 @@
-FROM python:3.9-slim
+# 明确使用 Debian 12 (bookworm)，稳定且国内镜像支持好
+FROM python:3.9-slim-bookworm
 
 WORKDIR /app
 
-# 安装编译依赖和系统库
-RUN sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list \
-	&& apt-get update && apt-get install -y --no-install-recommends \
+# 替换为阿里云 APT 源（生成传统的 sources.list）
+RUN echo "deb https://mirrors.aliyun.com/debian/ bookworm main" > /etc/apt/sources.list \
+ && echo "deb https://mirrors.aliyun.com/debian-security/ bookworm-security main" >> /etc/apt/sources.list \
+ && echo "deb https://mirrors.aliyun.com/debian/ bookworm-updates main" >> /etc/apt/sources.list
+
+# 安装系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libffi-dev \
     libjpeg-dev \
     zlib1g-dev \
     libpng-dev \
-    && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/*
 
 # 安装 Python 依赖
 COPY requirements.txt .

@@ -1,0 +1,171 @@
+# ===========================
+# 拾光记忆 - Git 忽略文件
+# ===========================
+
+# ---------------------------
+# Python 后端
+# ---------------------------
+# 虚拟环境
+backend/venv/
+venv/
+.venv/
+env/
+.env.local
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 分发/打包
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+
+# 单元测试/覆盖率
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# ---------------------------
+# Node.js 前端
+# ---------------------------
+# 依赖目录
+frontend/node_modules/
+node_modules/
+
+# 构建输出
+frontend/dist/
+
+# Vite 缓存
+frontend/.vite/
+.vite/
+
+# 日志
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------------------------
+# 用户数据（重要：不要上传）
+# ---------------------------
+# 数据库文件
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# 上传的文件
+uploads/
+backend/uploads/
+
+# ---------------------------
+# 环境变量（包含敏感信息）
+# ---------------------------
+.env
+.env.local
+.env.*.local
+backend/.env
+
+# 保留示例文件
+!.env.example
+!backend/.env.example
+
+# ---------------------------
+# IDE 和编辑器
+# ---------------------------
+# JetBrains (PyCharm, WebStorm)
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+.#*
+
+# ---------------------------
+# 操作系统
+# ---------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+
+# ---------------------------
+# 日志文件
+# ---------------------------
+*.log
+logs/
+*.log.*
+
+# ---------------------------
+# 临时文件
+# ---------------------------
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# ---------------------------
+# Docker（可选）
+# ---------------------------
+# 如果不想上传 Docker 数据卷
+# docker-compose.override.yml
+
+# ---------------------------
+# 测试和调试
+# ---------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---------------------------
+# 其他
+# ---------------------------
+# 证书文件（如果有）
+*.pem
+*.key
+*.crt
+
+# 压缩文件
+*.zip
+*.tar.gz
+*.rar
+
+# 备份文件
+backups/
+*.bak

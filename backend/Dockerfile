@@ -1,5 +1,5 @@
 # 明确使用 Debian 12 (bookworm)，稳定且国内镜像支持好
-FROM python:3.9-slim-bookworm
+FROM python:3.11-slim-bookworm
 
 WORKDIR /app
 

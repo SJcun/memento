@@ -1,28 +1,33 @@
 """
 配置管理模块
 使用pydantic-settings的BaseSettings管理环境变量配置
-支持从.env文件或系统环境变量读取配置
+支持从.env文件或系统环境变量读取配置 
 """
 
 import os
 from typing import Optional
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from datetime import date
 
-# 加载.env文件（如果存在）
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    # python-dotenv未安装，跳过
-    pass
+# 获取当前文件所在目录（backend目录）
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ENV_FILE_PATH = os.path.join(BASE_DIR, ".env")
 
 
 class Settings(BaseSettings):
     """
     应用配置类
-    所有配置项都有默认值，可以通过环境变量覆盖
+    所有配置项都有默认值，可以通过环境变量或.env文件覆盖
+
+    优先级：环境变量 > .env文件 > 默认值
     """
+
+    # pydantic-settings v2 配置方式
+    model_config = SettingsConfigDict(
+        env_file=ENV_FILE_PATH,
+        env_file_encoding="utf-8",
+        extra="ignore",  # 忽略未定义的环境变量
+    )
 
     # 安全配置
     SECRET_KEY: str = "CHANGE_THIS_TO_A_SUPER_SECRET_KEY"
@@ -58,7 +63,7 @@ class Settings(BaseSettings):
     @property
     def base_dir(self) -> str:
         """获取项目根目录"""
-        return os.path.dirname(os.path.abspath(__file__))
+        return BASE_DIR
 
     @property
     def upload_dir_path(self) -> str:
@@ -84,16 +89,6 @@ class Settings(BaseSettings):
             return os.path.join(self.base_dir, db_relative_path)
         return self.DATABASE_URL
 
-    class Config:
-        """Pydantic配置"""
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-
-        @classmethod
-        def customise_sources(cls, init_settings, env_settings, file_secret_settings):
-            """自定义配置源顺序"""
-            return env_settings, init_settings
-
 
 # 创建全局配置实例
 settings = Settings()
@@ -112,3 +107,12 @@ def ensure_directories():
 
 # 在导入时自动创建目录
 ensure_directories()
+
+# 调试：打印配置来源（可删除）
+if __name__ == "__main__":
+    print(f"配置文件路径: {ENV_FILE_PATH}")
+    print(f"配置文件存在: {os.path.exists(ENV_FILE_PATH)}")
+    print(f"SECRET_KEY: {settings.SECRET_KEY[:20]}...")
+    print(f"DEFAULT_ADMIN_USERNAME: {settings.DEFAULT_ADMIN_USERNAME}")
+    print(f"DEFAULT_ADMIN_PASSWORD: {settings.DEFAULT_ADMIN_PASSWORD}")
+    print(f"DATABASE_URL: {settings.DATABASE_URL}")

@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  # 后端服务
+  backend:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: memento_api
+    restart: always
+    volumes:
+      - ./data:/app/data          # 数据库持久化
+      - ./uploads:/app/uploads    # 图片持久化（原图+缩略图）
+    environment:
+      - SECRET_KEY=d04676b187aa9c9d9e3d3b722c7cf834f1f2eda8770df81ce206669cec1444b4
+    ports:
+      - "8001:8000"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M            # 限制内存，保护您的 2G 服务器
+
+  # 前端服务 (Nginx)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: memento_web
+    restart: always
+    ports:
+      - "8002:80"                   # 外部通过 http://your-ip 访问
+    depends_on:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M

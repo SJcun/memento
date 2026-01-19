@@ -103,6 +103,14 @@ class Goal(Base):
     text = Column(String, nullable=False, comment="目标描述")
     completed = Column(Boolean, default=False, comment="完成状态")
 
+    # 完成相关信息
+    completed_at = Column(Date, nullable=True, comment="完成时间")
+    week_year = Column(Integer, nullable=True, comment="完成时的年份索引")
+    week_index = Column(Integer, nullable=True, comment="完成时的周索引")
+
+    # 时间戳
+    created_at = Column(Date, default=date.today, comment="创建时间")
+
     # 关系（由SQLAlchemy自动处理）
     # user = relationship("User", back_populates="goals")
 

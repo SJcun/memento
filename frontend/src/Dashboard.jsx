@@ -6,6 +6,7 @@ import {
   Download, FileText, Maximize2, LogOut, UserPlus
 } from 'lucide-react';
 import axios from 'axios';
+import { fetchGoals, createGoal, updateGoal, deleteGoal, updateUserPassword } from './api';
 
 // --- API Definitions (已内联以修复导入错误) ---
 
@@ -51,6 +52,15 @@ const saveEventToBackend = async (yearIdx, weekIdx, data) => {
     data.imageFiles.forEach(file => {
       formData.append('images', file); // 后端期望 'images' 字段接收多个文件
     });
+  }
+
+  // 发送要保留的现有图片URL（过滤掉null/无效值）
+  if (data.imagesOriginal && Array.isArray(data.imagesOriginal)) {
+    const validOriginalUrls = data.imagesOriginal.filter(url => url && typeof url === 'string' && url.trim() !== '');
+    formData.append('keep_images', JSON.stringify(validOriginalUrls));
+  } else {
+    // 如果没有现有图片，发送空数组以清空已删除的图片
+    formData.append('keep_images', JSON.stringify([]));
   }
 
   const res = await api.post('/events', formData);
@@ -194,7 +204,7 @@ export default function Dashboard({ userConfig, onLogout }) {
   const [config, setConfig] = useState(userConfig || {});
   const [events, setEvents] = useState({}); // 从后端获取的 Map
   const [chronicles, setChronicles] = useState(() => JSON.parse(localStorage.getItem('memento_chronicles') || '[]'));
-  const [goals, setGoals] = useState(() => JSON.parse(localStorage.getItem('memento_goals') || '[]'));
+  const [goals, setGoals] = useState([]);
   const [specialDays, setSpecialDays] = useState([]);
   const [upcomingReminders, setUpcomingReminders] = useState([]);
 
@@ -217,6 +227,15 @@ export default function Dashboard({ userConfig, onLogout }) {
     nickname: config.nickname || config.username || '用户',
     avatar: config.avatar_url || config.avatar || ''
   });
+  // 修改密码相关
+  const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
+  const [passwordForm, setPasswordForm] = useState({
+    oldPassword: '',
+    newPassword: '',
+    confirmPassword: ''
+  });
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [passwordError, setPasswordError] = useState('');
   // 纪念日/计划日相关
   const [isSpecialDaysModalOpen, setIsSpecialDaysModalOpen] = useState(false);
   const [tempSpecialDay, setTempSpecialDay] = useState({
@@ -230,8 +249,8 @@ export default function Dashboard({ userConfig, onLogout }) {
   const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
   const [calendarView, setCalendarView] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() });
 
-  // 计算用户当前年龄（从出生日期到今天的完整年数）
-  const getCurrentAge = () => {
+  // 辅助函数：计算给定目标日期时的年龄（完整年数）
+  const getAgeAtDate = (targetDate) => {
     if (!config || !config.dob) return 0;
     let birthDate;
     if (typeof config.dob === 'string') {
@@ -240,7 +259,7 @@ export default function Dashboard({ userConfig, onLogout }) {
     } else {
       birthDate = new Date(config.dob);
     }
-    const today = new Date();
+    const today = new Date(targetDate);
     let age = today.getFullYear() - birthDate.getFullYear();
     // 如果今年的生日还没到，年龄减1
     const thisYearBirthday = new Date(today.getFullYear(), birthDate.getMonth(), birthDate.getDate());
@@ -248,6 +267,11 @@ export default function Dashboard({ userConfig, onLogout }) {
       age -= 1;
     }
     return Math.max(0, age);
+  };
+
+  // 计算用户当前年龄（从出生日期到今天的完整年数）
+  const getCurrentAge = () => {
+    return getAgeAtDate(new Date());
   };
 
   const [viewYear, setViewYear] = useState(() => getCurrentAge());
@@ -280,9 +304,74 @@ export default function Dashboard({ userConfig, onLogout }) {
     }
   }, [config]);
 
-  // 本地持久化 (仅 Chronicles 和 Goals，因为 Events 已上云)
+  // 加载目标数据（包含从localStorage迁移）
+  useEffect(() => {
+    if (!config) return;
+
+    const migrateLocalGoals = async () => {
+      try {
+        // 检查localStorage中是否有旧数据
+        const localGoalsStr = localStorage.getItem('memento_goals');
+        if (localGoalsStr) {
+          const localGoals = JSON.parse(localGoalsStr);
+          if (Array.isArray(localGoals) && localGoals.length > 0) {
+            console.log(`发现 ${localGoals.length} 个本地目标，开始迁移到云端...`);
+
+            // 逐个迁移目标到后端
+            for (const localGoal of localGoals) {
+              try {
+                const goalData = {
+                  text: localGoal.text,
+                  completed: localGoal.completed,
+                  completed_at: localGoal.completedAt ?
+                    localGoal.completedAt.split('T')[0] : null, // 转换为YYYY-MM-DD格式
+                  week_year: localGoal.weekYear,
+                  week_index: localGoal.weekIndex
+                };
+
+                await createGoal(goalData);
+              } catch (err) {
+                console.error(`迁移目标失败: ${localGoal.text}`, err);
+              }
+            }
+
+            console.log('目标迁移完成，清除本地存储');
+            localStorage.removeItem('memento_goals');
+          }
+        }
+      } catch (err) {
+        console.error("目标迁移过程中出错", err);
+      }
+    };
+
+    const loadGoals = async () => {
+      try {
+        // 首先尝试迁移本地数据（如果存在）
+        await migrateLocalGoals();
+
+        // 然后从后端加载数据
+        const data = await fetchGoals();
+        // 转换字段名：从蛇形命名法转换为camelCase
+        const convertedData = data.map(goal => ({
+          id: goal.id,
+          text: goal.text,
+          completed: goal.completed,
+          completedAt: goal.completed_at, // snake_case -> camelCase
+          weekYear: goal.week_year, // snake_case -> camelCase
+          weekIndex: goal.week_index, // snake_case -> camelCase
+          createdAt: goal.created_at // snake_case -> camelCase
+        }));
+        setGoals(convertedData);
+      } catch (err) {
+        console.error("加载目标数据失败", err);
+      }
+    };
+
+    loadGoals();
+  }, [config]);
+
+  // 本地持久化 (仅 Chronicles 存储在本地，因为 Events 和 Goals 已上云)
   useEffect(() => { localStorage.setItem('memento_chronicles', JSON.stringify(chronicles)); }, [chronicles]);
-  useEffect(() => { localStorage.setItem('memento_goals', JSON.stringify(goals)); }, [goals]);
 
   // 更新用户信息
   useEffect(() => {
@@ -422,39 +511,197 @@ export default function Dashboard({ userConfig, onLogout }) {
     }
   };
 
-  // 辅助函数：获取日期对应的周ID
+
+  // 辅助函数：获取日期所在周的周一
+  const getMondayOfWeek = (date) => {
+    const d = new Date(date);
+    const day = d.getDay(); // 0=周日, 1=周一, ..., 6=周六
+    // 计算到上周一的差值：如果周日，减去6天；否则，减去(day-1)天
+    const diff = day === 0 ? -6 : 1 - day;
+    d.setDate(d.getDate() + diff);
+    // 设置为当天开始时间
+    d.setHours(0, 0, 0, 0);
+    return d;
+  };
+
+  // 辅助函数：获取日期对应的日历周信息（基于周一为一周开始）
+  const getCalendarWeekInfo = (date) => {
+    const targetDate = new Date(date);
+    targetDate.setHours(0, 0, 0, 0);
+
+    // 1. 找到目标日期所在周的周一
+    const mondayOfWeek = getMondayOfWeek(targetDate);
+
+    // 2. 确定周的年份：使用该周的周四（周一+3天）所在的年份
+    const thursdayOfWeek = new Date(mondayOfWeek);
+    thursdayOfWeek.setDate(thursdayOfWeek.getDate() + 3);
+    const weekYear = thursdayOfWeek.getFullYear();
+
+    // 3. 找到该年第一个周四
+    const firstThursdayOfYear = new Date(weekYear, 0, 4); // 1月4日总是属于第一周
+    const firstMondayOfYear = getMondayOfWeek(firstThursdayOfYear);
+
+    // 4. 计算周索引
+    const diffInMs = mondayOfWeek.getTime() - firstMondayOfYear.getTime();
+    const diffInDays = diffInMs / (1000 * 60 * 60 * 24);
+    let weekIndex = Math.floor(diffInDays / 7);
+
+    // 处理边界情况：如果周索引为负数，则属于上一年的最后一周
+    if (weekIndex < 0) {
+      // 重新计算上一年的周信息
+      const prevYear = weekYear - 1;
+      const prevYearThursday = new Date(prevYear, 0, 4);
+      const prevYearMonday = getMondayOfWeek(prevYearThursday);
+      const diffInMsPrev = mondayOfWeek.getTime() - prevYearMonday.getTime();
+      const diffInDaysPrev = diffInMsPrev / (1000 * 60 * 60 * 24);
+      weekIndex = Math.floor(diffInDaysPrev / 7);
+      // 返回上一年的信息
+      return { year: prevYear, weekIndex };
+    }
+
+    // 处理周索引超过51的情况（理论上不应该发生，但安全起见）
+    if (weekIndex >= 52) {
+      weekIndex = 51;
+    }
+
+    return { year: weekYear, weekIndex };
+  };
+
+  // 辅助函数：获取日期对应的周ID（与网格中的年-周索引一致）
   const getWeekIdFromDate = (date) => {
     if (!config || !config.dob) return null;
+
     const birthDate = new Date(config.dob);
-    const totalWeeks = diffInWeeks(date, birthDate);
-    const yearIdx = Math.floor(totalWeeks / 52);
-    const weekIdx = totalWeeks % 52;
+
+    // 1. 找到日期所在周的周一
+    const mondayOfWeek = getMondayOfWeek(date);
+
+    // 2. 计算周一的年龄（与viewYear计算逻辑一致）
+    const yearIdx = getAgeAtDate(mondayOfWeek);
+
+    // 3. 计算对应的日历年份
+    const displayYear = birthDate.getFullYear() + yearIdx;
+
+    // 4. 找到该年第一周周一
+    const firstMondayOfYear = getDateFromWeekInfo(displayYear, 0);
+
+    // 5. 计算周索引
+    const diffInMs = mondayOfWeek.getTime() - firstMondayOfYear.getTime();
+    const diffInDays = diffInMs / (1000 * 60 * 60 * 24);
+    let weekIdx = Math.floor(diffInDays / 7);
+
+    // 调整weekIdx到0-51范围（理论上应该在范围内，但安全起见）
+    if (weekIdx < 0) {
+      // 如果为负数，可能mondayOfWeek属于上一年的最后一周
+      // 重新计算上一年的信息
+      const prevDisplayYear = displayYear - 1;
+      const prevFirstMonday = getDateFromWeekInfo(prevDisplayYear, 0);
+      const diffInMsPrev = mondayOfWeek.getTime() - prevFirstMonday.getTime();
+      const diffInDaysPrev = diffInMsPrev / (1000 * 60 * 60 * 24);
+      weekIdx = Math.floor(diffInDaysPrev / 7);
+      // 年索引也需要减1
+      return { yearIdx: yearIdx - 1, weekIdx };
+    }
+
+    if (weekIdx >= 52) {
+      // 如果超过51，可能属于下一年的第一周
+      weekIdx = 0;
+      // 年索引加1
+      return { yearIdx: yearIdx + 1, weekIdx: 0 };
+    }
+
     return { yearIdx, weekIdx };
   };
 
-  // 处理目标完成/取消完成
-  const handleGoalToggle = (goalId) => {
-    setGoals(goals.map(g => {
-      if (g.id !== goalId) return g;
+  // 辅助函数：根据年份和周索引获取该周周一的日期
+  const getDateFromWeekInfo = (year, weekIndex) => {
+    // 找到该年第一个周四（1月4日总是属于第一周）
+    const firstThursday = new Date(year, 0, 4);
+    const firstMonday = getMondayOfWeek(firstThursday);
 
-      const isCompleting = !g.completed;
-      if (isCompleting) {
-        // 标记为完成：记录完成时间和周信息
-        const now = new Date();
-        const weekId = getWeekIdFromDate(now);
-        return {
-          ...g,
-          completed: true,
-          completedAt: now.toISOString(),
-          weekYear: weekId?.yearIdx,
-          weekIndex: weekId?.weekIdx
-        };
-      } else {
-        // 取消完成：清除完成信息
-        const { completedAt, weekYear, weekIndex, ...rest } = g;
-        return { ...rest, completed: false };
-      }
-    }));
+    // 计算目标周周一的日期
+    const targetMonday = new Date(firstMonday);
+    targetMonday.setDate(targetMonday.getDate() + weekIndex * 7);
+
+    return targetMonday;
+  };
+
+  // 处理目标完成/取消完成
+  const handleGoalToggle = async (goalId) => {
+    const goal = goals.find(g => g.id === goalId);
+    if (!goal) return;
+
+    const isCompleting = !goal.completed;
+    let updateData = { completed: isCompleting };
+
+    if (isCompleting) {
+      // 标记为完成：记录完成时间和周信息
+      const now = new Date();
+      const weekId = getWeekIdFromDate(now);
+      updateData.completed_at = now.toISOString().split('T')[0]; // YYYY-MM-DD格式
+      updateData.week_year = weekId?.yearIdx;
+      updateData.week_index = weekId?.weekIdx;
+    } else {
+      // 取消完成：清除完成信息
+      updateData.completed_at = null;
+      updateData.week_year = null;
+      updateData.week_index = null;
+    }
+
+    try {
+      const updatedGoal = await updateGoal(goalId, updateData);
+      // 转换字段名并更新本地状态
+      const convertedGoal = {
+        id: updatedGoal.id,
+        text: updatedGoal.text,
+        completed: updatedGoal.completed,
+        completedAt: updatedGoal.completed_at,
+        weekYear: updatedGoal.week_year,
+        weekIndex: updatedGoal.week_index,
+        createdAt: updatedGoal.created_at
+      };
+      setGoals(goals.map(g => g.id === goalId ? convertedGoal : g));
+    } catch (err) {
+      console.error("更新目标失败", err);
+    }
+  };
+
+  // 添加新目标
+  const handleAddGoal = async () => {
+    if (!tempGoal.trim()) return;
+
+    const newGoalData = {
+      text: tempGoal.trim(),
+      completed: false
+    };
+
+    try {
+      const createdGoal = await createGoal(newGoalData);
+      // 转换字段名
+      const convertedGoal = {
+        id: createdGoal.id,
+        text: createdGoal.text,
+        completed: createdGoal.completed,
+        completedAt: createdGoal.completed_at,
+        weekYear: createdGoal.week_year,
+        weekIndex: createdGoal.week_index,
+        createdAt: createdGoal.created_at
+      };
+      setGoals([...goals, convertedGoal]);
+      setTempGoal('');
+    } catch (err) {
+      console.error("创建目标失败", err);
+    }
+  };
+
+  // 删除目标
+  const handleDeleteGoal = async (goalId) => {
+    try {
+      await deleteGoal(goalId);
+      setGoals(goals.filter(g => g.id !== goalId));
+    } catch (err) {
+      console.error("删除目标失败", err);
+    }
   };
 
   // 处理器
@@ -472,8 +719,8 @@ export default function Dashboard({ userConfig, onLogout }) {
 
       // 计算显示的日历年份
       const displayYear = birthDate.getFullYear() + yearIdx;
-      // 计算点击的周的开始日期（基于日历年1月1日，消除累积误差）
-      const clickedWeekStart = new Date(displayYear, 0, 1 + weekIdx * 7);
+      // 计算点击的周的开始日期（基于日历周，周一为一周开始）
+      const clickedWeekStart = getDateFromWeekInfo(displayYear, weekIdx);
 
       // 获取今天的日期（只比较日期，不比较时间）
       const today = new Date();
@@ -508,21 +755,25 @@ export default function Dashboard({ userConfig, onLogout }) {
   const handleImageSelect = (e) => {
     const files = Array.from(e.target.files);
     if (files.length > 0) {
-      // 为每个文件创建预览URL
-      const previewUrls = files.map(file => URL.createObjectURL(file));
+      // 为每个新文件创建预览URL
+      const newPreviewUrls = files.map(file => URL.createObjectURL(file));
+
       setTempEvent(prev => {
-        // 释放之前的预览URL
-        if (prev.images) {
-          prev.images.forEach(url => URL.revokeObjectURL(url));
-        }
+        // 合并现有图片和新图片
+        const mergedImages = [...(prev.images || []), ...newPreviewUrls];
+        const mergedImagesOriginal = [...(prev.imagesOriginal || []), ...files.map(() => null)]; // 新图片没有原始URL
+        const mergedImageFiles = [...(prev.imageFiles || []), ...files];
+
         return {
           ...prev,
-          images: previewUrls,
-          imagesOriginal: [], // 清空原始图片URL，因为这是新上传
-          imageFiles: files // 存储所有文件用于上传
+          images: mergedImages,
+          imagesOriginal: mergedImagesOriginal,
+          imageFiles: mergedImageFiles
         };
       });
     }
+    // 清空文件输入，允许再次选择相同文件
+    e.target.value = '';
   };
 
   const handleSaveEvent = async () => {
@@ -579,6 +830,52 @@ export default function Dashboard({ userConfig, onLogout }) {
       } catch (err) {
           alert("更新失败: " + (err.response?.data?.detail || "未知错误"));
       }
+  };
+
+  // 修改密码处理
+  const handleChangePassword = async (e) => {
+    e.preventDefault();
+    setPasswordError('');
+
+    // 前端验证
+    if (!passwordForm.oldPassword || !passwordForm.newPassword || !passwordForm.confirmPassword) {
+      setPasswordError('请填写所有密码字段');
+      return;
+    }
+
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setPasswordError('新密码与确认密码不一致');
+      return;
+    }
+
+    if (passwordForm.newPassword.length < 6) {
+      setPasswordError('新密码长度至少为6位');
+      return;
+    }
+
+    setIsChangingPassword(true);
+
+    try {
+      await updateUserPassword(
+        passwordForm.oldPassword,
+        passwordForm.newPassword,
+        passwordForm.confirmPassword
+      );
+
+      alert('密码修改成功');
+      // 重置表单并关闭模态框
+      setPasswordForm({
+        oldPassword: '',
+        newPassword: '',
+        confirmPassword: ''
+      });
+      setIsChangePasswordModalOpen(false);
+      setPasswordError('');
+    } catch (err) {
+      setPasswordError(err.response?.data?.detail || '密码修改失败，请检查旧密码是否正确');
+    } finally {
+      setIsChangingPassword(false);
+    }
   };
 
   // 头像上传处理
@@ -903,8 +1200,8 @@ export default function Dashboard({ userConfig, onLogout }) {
 
                             // 计算显示的日历年份
                             const displayYear = birthDate.getFullYear() + viewYear;
-                            // 计算周的开始日期（基于日历年1月1日，消除累积误差）
-                            const cellStartDate = new Date(displayYear, 0, 1 + idx * 7);
+                            // 计算周的开始日期（基于日历周，周一为一周开始）
+                            const cellStartDate = getDateFromWeekInfo(displayYear, idx);
 
                             // 计算周的结束日期
                             const cellEndDate = new Date(cellStartDate);
@@ -920,8 +1217,8 @@ export default function Dashboard({ userConfig, onLogout }) {
                             // 判断是否为当前周：今天在周的开始和结束日期之间
                             isCurrentWeek = cellStartDate <= todayStart && todayStart <= cellEndDate;
 
-                            // 额外检查：只有当displayYear是当前年份时才显示当前周标记
-                            if (displayYear !== today.getFullYear()) {
+                            // 额外检查：只有当周的起始年份是当前年份时才显示当前周标记
+                            if (cellStartDate.getFullYear() !== today.getFullYear()) {
                                 isCurrentWeek = false;
                             }
                         }
@@ -954,7 +1251,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                     <h3 className="font-bold mb-4 flex items-center gap-2"><Target size={18}/> 目标清单</h3>
                     <div className="flex gap-2 mb-4">
                         <input value={tempGoal} onChange={e=>setTempGoal(e.target.value)} className="flex-1 bg-black border border-neutral-700 rounded px-2 text-sm text-white" placeholder="添加目标..." />
-                        <button onClick={()=>{if(tempGoal){setGoals([...goals, {id:Date.now(), text:tempGoal, completed:false}]);setTempGoal('')}}} className="bg-white text-black p-2 rounded hover:bg-neutral-200"><Plus size={16}/></button>
+                        <button onClick={handleAddGoal} className="bg-white text-black p-2 rounded hover:bg-neutral-200"><Plus size={16}/></button>
                     </div>
                     <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
                         {filteredGoals.map(g => (
@@ -964,7 +1261,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                                 {g.completedAt && g.weekYear !== undefined && (
                                     <span className="text-xs text-neutral-500 ml-1">(第 {g.weekYear} 岁)</span>
                                 )}
-                                <button onClick={()=>setGoals(goals.filter(x=>x.id!==g.id))} className="ml-auto text-neutral-600 hover:text-red-500"><Trash2 size={14}/></button>
+                                <button onClick={() => handleDeleteGoal(g.id)} className="ml-auto text-neutral-600 hover:text-red-500"><Trash2 size={14}/></button>
                             </div>
                         ))}
                     </div>
@@ -1357,7 +1654,80 @@ export default function Dashboard({ userConfig, onLogout }) {
                      />
                  </div>
                  <button type="submit" className="w-full bg-white text-black p-2 rounded font-bold">保存资料</button>
+                 <button
+                   type="button"
+                   onClick={() => {
+                     setIsUserProfileModalOpen(false);
+                     setIsChangePasswordModalOpen(true);
+                   }}
+                   className="w-full bg-neutral-800 text-white p-2 rounded font-bold mt-2 hover:bg-neutral-700 transition-colors"
+                 >
+                   修改密码
+                 </button>
              </form>
+        </Modal>
+
+        {/* 弹窗：修改密码 */}
+        <Modal isOpen={isChangePasswordModalOpen} onClose={()=>{
+          setIsChangePasswordModalOpen(false);
+          setPasswordError('');
+          setPasswordForm({
+            oldPassword: '',
+            newPassword: '',
+            confirmPassword: ''
+          });
+        }} title="修改密码">
+          <form onSubmit={handleChangePassword} className="space-y-4">
+            {passwordError && (
+              <div className="bg-red-900/50 border border-red-700 text-red-300 p-3 rounded text-sm">
+                {passwordError}
+              </div>
+            )}
+
+            <div>
+              <label className="block text-sm text-neutral-400 mb-1">旧密码</label>
+              <input
+                type="password"
+                value={passwordForm.oldPassword}
+                onChange={e=>setPasswordForm({...passwordForm, oldPassword: e.target.value})}
+                placeholder="请输入当前密码"
+                className="w-full bg-black border border-neutral-700 p-2 rounded text-white"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm text-neutral-400 mb-1">新密码</label>
+              <input
+                type="password"
+                value={passwordForm.newPassword}
+                onChange={e=>setPasswordForm({...passwordForm, newPassword: e.target.value})}
+                placeholder="至少6位字符"
+                className="w-full bg-black border border-neutral-700 p-2 rounded text-white"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm text-neutral-400 mb-1">确认新密码</label>
+              <input
+                type="password"
+                value={passwordForm.confirmPassword}
+                onChange={e=>setPasswordForm({...passwordForm, confirmPassword: e.target.value})}
+                placeholder="再次输入新密码"
+                className="w-full bg-black border border-neutral-700 p-2 rounded text-white"
+                required
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={isChangingPassword}
+              className="w-full bg-white text-black p-2 rounded font-bold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-neutral-200 transition-colors"
+            >
+              {isChangingPassword ? '修改中...' : '确认修改'}
+            </button>
+          </form>
         </Modal>
 
         {/* 弹窗：导出 */}

@@ -195,6 +195,7 @@ async def save_event(
     mood: str = Form("neutral", description="心情状态"),
     image: UploadFile = File(None, description="事件图片（单个，向后兼容）"),
     images: List[UploadFile] = File(None, description="事件图片列表（多张）"),
+    keep_images: str = Form(None, description="要保留的现有图片URL列表（JSON字符串）"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, str]:
@@ -250,6 +251,7 @@ async def save_event(
     original_paths = []
     thumbnail_paths = []
 
+    # 处理新上传的图片
     for img in all_images:
         # 验证图片大小
         validate_image_size(img)
@@ -259,9 +261,43 @@ async def save_event(
         original_paths.append(paths["original"])
         thumbnail_paths.append(paths["thumbnail"])
 
+    # 处理要保留的现有图片
+    keep_images_list = []
+    if keep_images:
+        try:
+            parsed = json.loads(keep_images)
+            if isinstance(parsed, list):
+                keep_images_list = parsed
+        except json.JSONDecodeError:
+            # JSON解析失败，忽略keep_images
+            pass
+
+    for img_url in keep_images_list:
+        if isinstance(img_url, str):
+            original_paths.append(img_url)
+            # 根据原始URL生成缩略图URL
+            # 例如: /static/originals/uuid.jpg -> /static/thumbnails/uuid_thumb.jpg
+            if '/originals/' in img_url:
+                # 提取文件名部分
+                filename = img_url.split('/')[-1]
+                # 移除扩展名，添加_thumb.jpg
+                name_without_ext = filename.rsplit('.', 1)[0] if '.' in filename else filename
+                thumb_filename = f"{name_without_ext}_thumb.jpg"
+                thumb_url = img_url.replace('/originals/', '/thumbnails/').replace(filename, thumb_filename)
+            else:
+                # 如果不是标准路径，使用相同URL（虽然可能不正确）
+                thumb_url = img_url
+            thumbnail_paths.append(thumb_url)
+
+    # 更新图片字段
     if original_paths:
+        # 有图片（新上传的或保留的）
         event.image_original = json.dumps(original_paths)
         event.image_thumbnail = json.dumps(thumbnail_paths)
+    else:
+        # 没有图片，清空字段
+        event.image_original = None
+        event.image_thumbnail = None
 
     db.commit()
 
@@ -335,7 +371,7 @@ async def upload_avatar(
     """
     import os
     import uuid
-    from PIL import Image
+    from PIL import Image, ImageOps
     import io
 
     # 验证文件类型
@@ -353,6 +389,9 @@ async def upload_avatar(
     try:
         # 使用 PIL 处理图片
         img = Image.open(io.BytesIO(content))
+
+        # 应用EXIF方向校正
+        img = ImageOps.exif_transpose(img)
 
         # 转换为 RGB（如果是 RGBA 或其他模式）
         if img.mode in ('RGBA', 'P'):
@@ -406,6 +445,22 @@ class SpecialDayUpdate(BaseModel):
     type: Optional[str] = None
     repeat_yearly: Optional[bool] = None
     notify_days_before: Optional[int] = None
+
+
+# --- 目标管理接口 ---
+class GoalCreate(BaseModel):
+    text: str
+    completed: bool = False
+    completed_at: Optional[str] = None  # YYYY-MM-DD格式
+    week_year: Optional[int] = None
+    week_index: Optional[int] = None
+
+class GoalUpdate(BaseModel):
+    text: Optional[str] = None
+    completed: Optional[bool] = None
+    completed_at: Optional[str] = None  # YYYY-MM-DD格式
+    week_year: Optional[int] = None
+    week_index: Optional[int] = None
 
 
 @router.get("/special-days")
@@ -569,3 +624,213 @@ async def get_upcoming_special_days(
     # 按日期排序
     upcoming.sort(key=lambda x: x["date"])
     return upcoming
+
+
+@router.get("/goals")
+async def get_goals(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """获取当前用户的所有目标"""
+    goals = db.query(Goal).filter(Goal.user_id == current_user.id).all()
+    return [
+        {
+            "id": goal.id,
+            "text": goal.text,
+            "completed": goal.completed,
+            "completed_at": goal.completed_at.isoformat() if goal.completed_at else None,
+            "week_year": goal.week_year,
+            "week_index": goal.week_index,
+            "created_at": goal.created_at.isoformat() if goal.created_at else None
+        }
+        for goal in goals
+    ]
+
+
+@router.post("/goals")
+async def create_goal(
+    goal: GoalCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """创建新的目标"""
+    # 解析完成时间
+    completed_at_date = None
+    if goal.completed_at:
+        try:
+            completed_at_date = date.fromisoformat(goal.completed_at)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="日期格式无效，请使用YYYY-MM-DD格式"
+            )
+
+    # 创建目标记录
+    new_goal = Goal(
+        user_id=current_user.id,
+        text=goal.text,
+        completed=goal.completed,
+        completed_at=completed_at_date,
+        week_year=goal.week_year,
+        week_index=goal.week_index,
+        created_at=date.today()
+    )
+
+    db.add(new_goal)
+    db.commit()
+    db.refresh(new_goal)
+
+    return {
+        "id": new_goal.id,
+        "text": new_goal.text,
+        "completed": new_goal.completed,
+        "completed_at": new_goal.completed_at.isoformat() if new_goal.completed_at else None,
+        "week_year": new_goal.week_year,
+        "week_index": new_goal.week_index,
+        "created_at": new_goal.created_at.isoformat() if new_goal.created_at else None
+    }
+
+
+@router.put("/goals/{goal_id}")
+async def update_goal(
+    goal_id: int,
+    goal_update: GoalUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """更新目标"""
+    # 查找目标
+    goal = db.query(Goal).filter(
+        Goal.id == goal_id,
+        Goal.user_id == current_user.id
+    ).first()
+
+    if not goal:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="目标不存在"
+        )
+
+    # 更新字段
+    if goal_update.text is not None:
+        goal.text = goal_update.text
+    if goal_update.completed is not None:
+        goal.completed = goal_update.completed
+
+        # 如果标记为完成且没有完成时间，设置为当前时间
+        if goal_update.completed and goal.completed_at is None:
+            goal.completed_at = date.today()
+        # 如果取消完成，清除完成时间
+        elif not goal_update.completed:
+            goal.completed_at = None
+
+    # 解析完成时间（如果提供）
+    if goal_update.completed_at is not None:
+        try:
+            goal.completed_at = date.fromisoformat(goal_update.completed_at)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="日期格式无效，请使用YYYY-MM-DD格式"
+            )
+
+    if goal_update.week_year is not None:
+        goal.week_year = goal_update.week_year
+    if goal_update.week_index is not None:
+        goal.week_index = goal_update.week_index
+
+    db.commit()
+    db.refresh(goal)
+
+    return {
+        "id": goal.id,
+        "text": goal.text,
+        "completed": goal.completed,
+        "completed_at": goal.completed_at.isoformat() if goal.completed_at else None,
+        "week_year": goal.week_year,
+        "week_index": goal.week_index,
+        "created_at": goal.created_at.isoformat() if goal.created_at else None
+    }
+
+
+@router.delete("/goals/{goal_id}")
+async def delete_goal(
+    goal_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """删除目标"""
+    goal = db.query(Goal).filter(
+        Goal.id == goal_id,
+        Goal.user_id == current_user.id
+    ).first()
+
+    if not goal:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="目标不存在"
+        )
+
+    db.delete(goal)
+    db.commit()
+
+    return {"msg": "目标删除成功"}
+
+
+# --- 密码修改接口 ---
+class PasswordChange(BaseModel):
+    old_password: str
+    new_password: str
+    confirm_password: str
+
+
+@router.put("/users/me/password")
+async def change_password(
+    password_change: PasswordChange,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    修改用户密码
+
+    Args:
+        password_change: 密码修改请求数据
+        db: 数据库会话
+        current_user: 当前用户
+
+    Returns:
+        Dict[str, str]: 操作结果消息
+
+    Raises:
+        HTTPException:
+            - 400: 旧密码错误、新密码格式错误或两次输入不一致
+    """
+    # 验证旧密码
+    from auth import verify_password
+    if not verify_password(password_change.old_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="旧密码错误"
+        )
+
+    # 验证新密码与确认密码是否一致
+    if password_change.new_password != password_change.confirm_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="新密码与确认密码不一致"
+        )
+
+    # 验证新密码长度（至少6位）
+    if len(password_change.new_password) < 6:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="新密码长度至少为6位"
+        )
+
+    # 生成新密码哈希
+    from auth import get_password_hash
+    current_user.hashed_password = get_password_hash(password_change.new_password)
+
+    db.commit()
+
+    return {"msg": "密码修改成功"}

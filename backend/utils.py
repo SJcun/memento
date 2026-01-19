@@ -9,7 +9,7 @@ import uuid
 from typing import Dict
 
 from fastapi import UploadFile, HTTPException, status
-from PIL import Image
+from PIL import Image, ImageOps
 
 from config import settings
 
@@ -56,21 +56,34 @@ def process_image(file: UploadFile) -> Dict[str, str]:
     thumb_path = os.path.join(settings.thumbnail_dir_path, thumb_filename)
 
     try:
-        # 1. 保存原始图片
-        with open(original_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        # 重置文件指针到开头（确保可以读取）
+        file.file.seek(0)
 
-        # 2. 生成缩略图
-        with Image.open(original_path) as img:
-            # 处理透明通道（PNG等格式）
+        # 1. 打开图片并应用EXIF方向校正
+        with Image.open(file.file) as img:
+            # 应用EXIF方向校正
+            img = ImageOps.exif_transpose(img)
+
+            # 保存校正后的原始图片（保持原始格式）
+            # 根据图片格式决定保存格式，如果未知则使用扩展名
+            if img.format:
+                img.save(original_path, format=img.format)
+            else:
+                # 如果图片没有format属性，使用原始扩展名
+                img.save(original_path)
+
+            # 2. 生成缩略图
+            # 处理透明通道（PNG等格式），缩略图统一转换为RGB
             if img.mode in ("RGBA", "P"):
-                img = img.convert("RGB")
+                thumb_img = img.convert("RGB")
+            else:
+                thumb_img = img.copy()
 
             # 调整尺寸：最大800px宽或高
-            img.thumbnail((settings.THUMBNAIL_MAX_SIZE, settings.THUMBNAIL_MAX_SIZE))
+            thumb_img.thumbnail((settings.THUMBNAIL_MAX_SIZE, settings.THUMBNAIL_MAX_SIZE))
 
             # 保存缩略图（压缩质量70%）
-            img.save(thumb_path, "JPEG", quality=70)
+            thumb_img.save(thumb_path, "JPEG", quality=70)
 
     except Exception as e:
         # 清理可能已创建的文件

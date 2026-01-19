@@ -55,6 +55,15 @@ export const saveEventToBackend = async (yearIdx, weekIdx, data) => {
     });
   }
 
+  // 发送要保留的现有图片URL（过滤掉null/无效值）
+  if (data.imagesOriginal && Array.isArray(data.imagesOriginal)) {
+    const validOriginalUrls = data.imagesOriginal.filter(url => url && typeof url === 'string' && url.trim() !== '');
+    formData.append('keep_images', JSON.stringify(validOriginalUrls));
+  } else {
+    // 如果没有现有图片，发送空数组以清空已删除的图片
+    formData.append('keep_images', JSON.stringify([]));
+  }
+
   const res = await api.post('/events', formData);
   return res.data;
 };
@@ -77,5 +86,36 @@ export const updateUserConfig = async (dob, lifeExpectancy = 100) => {
     });
     return res.data;
 }
+
+// 目标管理API
+export const fetchGoals = async () => {
+  const res = await api.get('/goals');
+  return res.data;
+};
+
+export const createGoal = async (goalData) => {
+  const res = await api.post('/goals', goalData);
+  return res.data;
+};
+
+export const updateGoal = async (goalId, goalData) => {
+  const res = await api.put(`/goals/${goalId}`, goalData);
+  return res.data;
+};
+
+export const deleteGoal = async (goalId) => {
+  const res = await api.delete(`/goals/${goalId}`);
+  return res.data;
+};
+
+// 修改密码
+export const updateUserPassword = async (oldPassword, newPassword, confirmPassword) => {
+  const res = await api.put('/users/me/password', {
+    old_password: oldPassword,
+    new_password: newPassword,
+    confirm_password: confirmPassword
+  });
+  return res.data;
+};
 
 export default api;

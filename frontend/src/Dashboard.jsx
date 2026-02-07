@@ -5,6 +5,7 @@ import {
   Target, Image as ImageIcon, Upload, Link as LinkIcon, LayoutGrid,
   Download, FileText, Maximize2, LogOut, UserPlus
 } from 'lucide-react';
+import EmojiPicker from 'emoji-picker-react';
 import axios from 'axios';
 import { fetchGoals, createGoal, updateGoal, deleteGoal, updateUserPassword } from './api';
 
@@ -208,8 +209,11 @@ export default function Dashboard({ userConfig, onLogout }) {
   const [specialDays, setSpecialDays] = useState([]);
   const [upcomingReminders, setUpcomingReminders] = useState([]);
 
-  const [selectedWeek, setSelectedWeek] = useState(null); 
+  const [selectedWeek, setSelectedWeek] = useState(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  // 表情选择器状态
+  const [showTitleEmojiPicker, setShowTitleEmojiPicker] = useState(false);
+  const [showContentEmojiPicker, setShowContentEmojiPicker] = useState(false);
   const [isGalleryOpen, setIsGalleryOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -1482,7 +1486,44 @@ export default function Dashboard({ userConfig, onLogout }) {
                     </div>
                 )}
 
-                <input value={tempEvent.title || ''} onChange={e=>setTempEvent({...tempEvent, title:e.target.value})} placeholder="标题" className="w-full bg-black border border-neutral-700 p-3 rounded text-white focus:outline-none focus:border-neutral-500" />
+                {/* 标题输入 + 表情选择器 */}
+                <div className="space-y-2">
+                    <div className="relative">
+                        <input
+                            value={tempEvent.title || ''}
+                            onChange={e=>setTempEvent({...tempEvent, title:e.target.value})}
+                            placeholder="标题"
+                            className="w-full bg-black border border-neutral-700 p-3 pr-12 rounded text-white focus:outline-none focus:border-neutral-500"
+                        />
+                        <button
+                            onClick={() => {
+                                setShowTitleEmojiPicker(!showTitleEmojiPicker);
+                                setShowContentEmojiPicker(false);
+                            }}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-white transition-colors p-1"
+                            title="添加表情"
+                        >
+                            <Smile size={20} />
+                        </button>
+                    </div>
+                    {showTitleEmojiPicker && (
+                        <div className="absolute z-50 mt-1">
+                            <div className="bg-neutral-900 border border-neutral-700 rounded-lg shadow-xl">
+                                <EmojiPicker
+                                    onEmojiClick={(emojiData) => {
+                                        setTempEvent({...tempEvent, title: (tempEvent.title || '') + emojiData.emoji});
+                                        setShowTitleEmojiPicker(false);
+                                    }}
+                                    width={320}
+                                    height={400}
+                                    theme="dark"
+                                    searchPlaceholder="搜索表情..."
+                                    emojiStyle="native"
+                                />
+                            </div>
+                        </div>
+                    )}
+                </div>
                 
                 <div className="flex gap-2">
                     {Object.entries(moodConfig).map(([key, config]) => (
@@ -1490,7 +1531,44 @@ export default function Dashboard({ userConfig, onLogout }) {
                     ))}
                 </div>
 
-                <textarea value={tempEvent.content || ''} onChange={e=>setTempEvent({...tempEvent, content:e.target.value})} placeholder="详情..." className="w-full min-h-32 h-48 bg-black border border-neutral-700 p-3 rounded text-white resize-y focus:outline-none focus:border-neutral-500" />
+                {/* 详情输入 + 表情选择器 */}
+                <div className="space-y-2">
+                    <div className="relative">
+                        <textarea
+                            value={tempEvent.content || ''}
+                            onChange={e=>setTempEvent({...tempEvent, content:e.target.value})}
+                            placeholder="详情..."
+                            className="w-full min-h-32 h-48 bg-black border border-neutral-700 p-3 pr-12 rounded text-white resize-y focus:outline-none focus:border-neutral-500"
+                        />
+                        <button
+                            onClick={() => {
+                                setShowContentEmojiPicker(!showContentEmojiPicker);
+                                setShowTitleEmojiPicker(false);
+                            }}
+                            className="absolute right-3 bottom-3 text-neutral-400 hover:text-white transition-colors p-1"
+                            title="添加表情"
+                        >
+                            <Smile size={20} />
+                        </button>
+                    </div>
+                    {showContentEmojiPicker && (
+                        <div className="absolute z-50 mt-1">
+                            <div className="bg-neutral-900 border border-neutral-700 rounded-lg shadow-xl">
+                                <EmojiPicker
+                                    onEmojiClick={(emojiData) => {
+                                        setTempEvent({...tempEvent, content: (tempEvent.content || '') + emojiData.emoji});
+                                        setShowContentEmojiPicker(false);
+                                    }}
+                                    width={320}
+                                    height={400}
+                                    theme="dark"
+                                    searchPlaceholder="搜索表情..."
+                                    emojiStyle="native"
+                                />
+                            </div>
+                        </div>
+                    )}
+                </div>
                 
                 <div className="flex justify-end gap-2 pt-2">
                     <button onClick={handleSaveEvent} className="px-6 py-2 bg-white text-black rounded font-bold hover:bg-neutral-200">保存</button>

@@ -169,3 +169,4 @@ temp/
 # 备份文件
 backups/
 *.bak
+CLAUDE.md

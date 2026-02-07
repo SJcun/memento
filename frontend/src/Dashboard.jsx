@@ -780,6 +780,72 @@ export default function Dashboard({ userConfig, onLogout }) {
     e.target.value = '';
   };
 
+  // 处理粘贴板图片
+  const handlePaste = (e) => {
+    // 只在编辑模态框打开时处理
+    if (!isEditModalOpen) return;
+
+    const clipboardData = e.clipboardData || window.clipboardData;
+    if (!clipboardData) return;
+
+    // 检查是否粘贴到输入框，如果是输入框且有文本内容，不处理图片
+    const activeElement = document.activeElement;
+    const isInputField = activeElement?.tagName === 'INPUT' || activeElement?.tagName === 'TEXTAREA';
+    const hasText = clipboardData.getData('text').trim().length > 0;
+
+    // 如果是输入框且有文本，让默认粘贴行为生效
+    if (isInputField && hasText) return;
+
+    // 查找粘贴板中的图片
+    const items = clipboardData.items;
+    const imageFiles = [];
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.indexOf('image') !== -1) {
+        const file = item.getAsFile();
+        if (file) {
+          // 为粘贴的图片添加合适的文件名
+          const timestamp = Date.now();
+          const ext = file.type.split('/')[1] || 'png';
+          const renamedFile = new File([file], `clipboard-${timestamp}.${ext}`, { type: file.type });
+          imageFiles.push(renamedFile);
+        }
+      }
+    }
+
+    // 如果找到图片，阻止默认行为并处理
+    if (imageFiles.length > 0) {
+      e.preventDefault();
+
+      // 创建预览URL
+      const newPreviewUrls = imageFiles.map(file => URL.createObjectURL(file));
+
+      setTempEvent(prev => {
+        const mergedImages = [...(prev.images || []), ...newPreviewUrls];
+        const mergedImagesOriginal = [...(prev.imagesOriginal || []), ...imageFiles.map(() => null)];
+        const mergedImageFiles = [...(prev.imageFiles || []), ...imageFiles];
+
+        return {
+          ...prev,
+          images: mergedImages,
+          imagesOriginal: mergedImagesOriginal,
+          imageFiles: mergedImageFiles
+        };
+      });
+    }
+  };
+
+  // 监听粘贴事件
+  useEffect(() => {
+    if (isEditModalOpen) {
+      document.addEventListener('paste', handlePaste);
+      return () => {
+        document.removeEventListener('paste', handlePaste);
+      };
+    }
+  }, [isEditModalOpen, tempEvent]);
+
   const handleSaveEvent = async () => {
     if (selectedWeek) {
       try {
@@ -1485,6 +1551,15 @@ export default function Dashboard({ userConfig, onLogout }) {
                         <button onClick={()=>fileInputRef.current?.click()} className="flex-1 border border-dashed border-neutral-600 p-4 rounded text-neutral-400 hover:bg-neutral-800 transition-colors flex justify-center gap-2"><Upload size={16}/> 上传图片</button>
                     </div>
                 )}
+
+                {/* 粘贴提示 */}
+                <div className="text-center text-neutral-500 text-sm flex items-center justify-center gap-2">
+                    <span>或按</span>
+                    <kbd className="px-2 py-1 bg-neutral-800 border border-neutral-700 rounded text-xs">Ctrl</kbd>
+                    <span>+</span>
+                    <kbd className="px-2 py-1 bg-neutral-800 border border-neutral-700 rounded text-xs">V</kbd>
+                    <span>粘贴图片</span>
+                </div>
 
                 {/* 标题输入 + 表情选择器 */}
                 <div className="space-y-2">

@@ -157,6 +157,34 @@ const moodConfig = {
   'hard': { label: '艰难 😔', color: 'bg-red-500 border-red-600' }
 };
 
+const moodDistributionMeta = [
+  { key: 'joy', label: '开心', color: '#22c55e', dotClass: 'bg-green-500' },
+  { key: 'neutral', label: '一般', color: '#eab308', dotClass: 'bg-yellow-500' },
+  { key: 'hard', label: '艰难', color: '#ef4444', dotClass: 'bg-red-500' },
+  { key: 'unmarked', label: '未标注情绪', color: '#71717a', dotClass: 'bg-neutral-500' },
+];
+
+const moodValueMap = {
+  unmarked: 0,
+  hard: 1,
+  neutral: 2,
+  joy: 3,
+};
+
+const moodValueLabelMap = {
+  0: '未填写',
+  1: '艰难',
+  2: '一般',
+  3: '开心',
+};
+
+const moodColorByValue = {
+  0: '#52525b',
+  1: '#ef4444',
+  2: '#eab308',
+  3: '#22c55e',
+};
+
 const emojiPickerCategories = [
   { category: 'suggested', name: '常用' },
   { category: 'smileys_people', name: '笑脸与人物' },
@@ -180,6 +208,21 @@ const diffInWeeks = (d1, d2) => Math.floor((d1 - d2) / MS_PER_WEEK);
 const formatDate = (dateLike) => {
   const date = new Date(dateLike);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+};
+
+const parseDateKey = (dateKey) => {
+  if (typeof dateKey !== 'string') return null;
+  const match = dateKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+  date.setHours(0, 0, 0, 0);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
+    return null;
+  }
+  return date;
 };
 
 const calculateLifeClock = (dob, lifeExpectancy = 100) => {
@@ -240,6 +283,8 @@ export default function Dashboard({ userConfig, onLogout }) {
   const [previewImageSrc, setPreviewImageSrc] = useState(null);
   const [isPreviewFullScreen, setIsPreviewFullScreen] = useState(false);
   const [isGalleryFullScreen, setIsGalleryFullScreen] = useState(false);
+  const [moodTrendHover, setMoodTrendHover] = useState(null);
+  const [moodPieHoverKey, setMoodPieHoverKey] = useState(null);
   
   // 绠＄悊鍛樻敞鍐岀浉鍏?
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
@@ -537,6 +582,191 @@ export default function Dashboard({ userConfig, onLogout }) {
   const toDateKey = (dateLike) => {
     return formatDate(startOfDay(dateLike));
   };
+
+  const lifeStats = useMemo(() => {
+    const today = startOfDay(new Date());
+    const todayTimestamp = today.getTime();
+    const recordedTimestamps = [];
+    let totalImageCount = 0;
+
+    Object.entries(events).forEach(([dateKey, event]) => {
+      if (!event) return;
+      const parsedDate = parseDateKey(dateKey);
+      if (!parsedDate) return;
+      if (parsedDate.getTime() > todayTimestamp) return;
+
+      recordedTimestamps.push(parsedDate.getTime());
+      if (Array.isArray(event.images) && event.images.length > 0) {
+        totalImageCount += event.images.length;
+      } else if (event.image) {
+        totalImageCount += 1;
+      }
+    });
+
+    const uniqueRecordedTimestamps = Array.from(new Set(recordedTimestamps)).sort((a, b) => a - b);
+
+    let longestStreak = 0;
+    let currentStreak = 0;
+    let previousTimestamp = null;
+    uniqueRecordedTimestamps.forEach((timestamp) => {
+      if (timestamp > todayTimestamp) return;
+      if (previousTimestamp !== null && timestamp - previousTimestamp === MS_PER_DAY) {
+        currentStreak += 1;
+      } else {
+        currentStreak = 1;
+      }
+      if (currentStreak > longestStreak) {
+        longestStreak = currentStreak;
+      }
+      previousTimestamp = timestamp;
+    });
+
+    const currentYear = today.getFullYear();
+    const yearStart = startOfDay(new Date(currentYear, 0, 1));
+    const moodCounts = { joy: 0, neutral: 0, hard: 0, unmarked: 0 };
+    const moodSeries = [];
+    if (yearStart <= today) {
+      for (let cursor = new Date(yearStart); cursor <= today; cursor = addDays(cursor, 1)) {
+        const event = events[toDateKey(cursor)];
+        const mood = event?.mood;
+        if (mood === 'joy' || mood === 'neutral' || mood === 'hard') {
+          moodCounts[mood] += 1;
+        } else {
+          moodCounts.unmarked += 1;
+        }
+
+        const dayOfYear = Math.floor((cursor.getTime() - yearStart.getTime()) / MS_PER_DAY) + 1;
+        const moodValue = moodValueMap[mood] ?? moodValueMap.unmarked;
+        const rawTitle = typeof event?.title === 'string' ? event.title.trim() : '';
+        const title = event ? (rawTitle || '（无标题）') : '未填写';
+        moodSeries.push({
+          index: moodSeries.length,
+          dayOfYear,
+          dateKey: toDateKey(cursor),
+          moodValue,
+          moodLabel: moodValueLabelMap[moodValue],
+          title,
+          hasRecord: Boolean(event),
+        });
+      }
+    }
+
+    const moodSegments = moodDistributionMeta.map((item) => ({
+      ...item,
+      count: moodCounts[item.key],
+    }));
+    const moodTotal = moodSegments.reduce((sum, item) => sum + item.count, 0);
+    const currentYearRecordedDays = moodCounts.joy + moodCounts.neutral + moodCounts.hard;
+
+    let accumulatedDegrees = 0;
+    const moodPieGradient = moodTotal > 0
+      ? `conic-gradient(${moodSegments.map((item) => {
+          const start = accumulatedDegrees;
+          accumulatedDegrees += (item.count / moodTotal) * 360;
+          return `${item.color} ${start.toFixed(2)}deg ${accumulatedDegrees.toFixed(2)}deg`;
+        }).join(', ')})`
+      : 'conic-gradient(#3f3f46 0deg 360deg)';
+
+    return {
+      recordedDays: uniqueRecordedTimestamps.length,
+      totalImageCount,
+      longestStreak,
+      moodSegments,
+      moodTotal,
+      moodPieGradient,
+      currentYear,
+      currentYearRecordedDays,
+      moodSeries,
+    };
+  }, [events]);
+
+  const moodTrendChart = useMemo(() => {
+    const data = lifeStats.moodSeries;
+    const chartWidth = 980;
+    const chartHeight = 300;
+    const margin = { top: 20, right: 16, bottom: 36, left: 48 };
+    const plotWidth = chartWidth - margin.left - margin.right;
+    const plotHeight = chartHeight - margin.top - margin.bottom;
+    const maxMoodValue = 3;
+    const pointCount = data.length;
+    const safeDivisor = Math.max(pointCount - 1, 1);
+    const barWidth = Math.max(1.5, Math.min(5, (plotWidth / Math.max(pointCount, 1)) * 0.72));
+
+    const getX = (index) => margin.left + (index / safeDivisor) * plotWidth;
+    const getY = (moodValue) => margin.top + ((maxMoodValue - moodValue) / maxMoodValue) * plotHeight;
+
+    const linePoints = data.map((point, index) => `${getX(index)},${getY(point.moodValue)}`).join(' ');
+    const bars = data.map((point, index) => {
+      const x = getX(index) - barWidth / 2;
+      const y = getY(point.moodValue);
+      const height = Math.max(1, getY(0) - y);
+      return {
+        key: point.dateKey,
+        x,
+        width: barWidth,
+        y,
+        height,
+        color: moodColorByValue[point.moodValue] || moodColorByValue[0],
+      };
+    });
+
+    const tickIndices = pointCount > 0
+      ? Array.from(new Set([
+          0,
+          Math.floor((pointCount - 1) * 0.25),
+          Math.floor((pointCount - 1) * 0.5),
+          Math.floor((pointCount - 1) * 0.75),
+          pointCount - 1,
+        ]))
+      : [];
+
+    return {
+      data,
+      chartWidth,
+      chartHeight,
+      margin,
+      plotHeight,
+      linePoints,
+      bars,
+      tickIndices,
+      pointCount,
+      getX,
+      getY,
+    };
+  }, [lifeStats.moodSeries]);
+
+  const moodPieChart = useMemo(() => {
+    const radius = 42;
+    const strokeWidth = 12;
+    const circumference = 2 * Math.PI * radius;
+    let accumulatedLength = 0;
+    const segments = lifeStats.moodSegments.map((segment) => {
+      const ratio = lifeStats.moodTotal > 0 ? segment.count / lifeStats.moodTotal : 0;
+      const dashLength = ratio * circumference;
+      const dashOffset = -accumulatedLength;
+      accumulatedLength += dashLength;
+      return {
+        ...segment,
+        ratio,
+        percent: ratio * 100,
+        dashLength,
+        dashOffset,
+      };
+    });
+
+    return {
+      radius,
+      strokeWidth,
+      circumference,
+      segments,
+    };
+  }, [lifeStats.moodSegments, lifeStats.moodTotal]);
+
+  const hoveredMoodPieSegment = moodPieHoverKey
+    ? moodPieChart.segments.find((segment) => segment.key === moodPieHoverKey) || null
+    : null;
+
+  const hoveredTrendPoint = moodTrendHover ? moodTrendChart.data[moodTrendHover.index] : null;
 
   const heatmapYears = useMemo(() => {
     const currentYear = new Date().getFullYear();
@@ -1276,6 +1506,229 @@ export default function Dashboard({ userConfig, onLogout }) {
                         </div>
                     </div>
                 </div>
+
+                <Card className="p-3 sm:p-4">
+                    <div className="flex items-center justify-between mb-3">
+                        <span className="font-bold text-sm sm:text-base">人生统计</span>
+                        <span className="text-xs text-neutral-500">{lifeStats.currentYear} 年</span>
+                    </div>
+                    <div className="grid grid-cols-1 xl:grid-cols-3 gap-3 sm:gap-4">
+                        <div className="xl:col-span-1 bg-neutral-900/50 border border-neutral-800 rounded-lg p-3">
+                            <div className="grid grid-cols-3 xl:grid-cols-1 gap-2">
+                                <div className="bg-neutral-900 border border-neutral-800 rounded-md p-2">
+                                    <div className="text-[11px] text-neutral-400">已记录总天数</div>
+                                    <div className="mt-1 text-lg sm:text-xl font-bold tabular-nums">{lifeStats.recordedDays.toLocaleString('zh-CN')}</div>
+                                </div>
+                                <div className="bg-neutral-900 border border-neutral-800 rounded-md p-2">
+                                    <div className="text-[11px] text-neutral-400">累计上传图片量</div>
+                                    <div className="mt-1 text-lg sm:text-xl font-bold tabular-nums">{lifeStats.totalImageCount.toLocaleString('zh-CN')}<span className="ml-1 text-sm text-neutral-400">张</span></div>
+                                </div>
+                                <div className="bg-neutral-900 border border-neutral-800 rounded-md p-2">
+                                    <div className="text-[11px] text-neutral-400">最长连续记录</div>
+                                    <div className="mt-1 text-lg sm:text-xl font-bold tabular-nums">{lifeStats.longestStreak.toLocaleString('zh-CN')}<span className="ml-1 text-sm text-neutral-400">天</span></div>
+                                </div>
+                            </div>
+                            <div className="mt-3 pt-3 border-t border-neutral-800">
+                                <div className="text-xs text-neutral-400 mb-2">本年情绪分布</div>
+                                <div className="flex items-center gap-3">
+                                    <div
+                                        className="relative w-28 h-28 sm:w-32 sm:h-32 shrink-0"
+                                        onMouseLeave={() => setMoodPieHoverKey(null)}
+                                    >
+                                        <svg viewBox="0 0 100 100" className="w-full h-full">
+                                            <circle
+                                                cx="50"
+                                                cy="50"
+                                                r={moodPieChart.radius}
+                                                fill="none"
+                                                stroke="#3f3f46"
+                                                strokeWidth={moodPieChart.strokeWidth}
+                                            />
+                                            {moodPieChart.segments.map((segment) => {
+                                              if (segment.dashLength <= 0) return null;
+                                              return (
+                                                <circle
+                                                  key={`mood-pie-${segment.key}`}
+                                                  cx="50"
+                                                  cy="50"
+                                                  r={moodPieChart.radius}
+                                                  fill="none"
+                                                  stroke={segment.color}
+                                                  strokeWidth={moodPieChart.strokeWidth}
+                                                  strokeDasharray={`${segment.dashLength} ${moodPieChart.circumference - segment.dashLength}`}
+                                                  strokeDashoffset={segment.dashOffset}
+                                                  transform="rotate(-90 50 50)"
+                                                  className="cursor-pointer transition-opacity"
+                                                  opacity={moodPieHoverKey && moodPieHoverKey !== segment.key ? 0.45 : 1}
+                                                  onMouseEnter={() => setMoodPieHoverKey(segment.key)}
+                                                />
+                                              );
+                                            })}
+                                        </svg>
+                                        <div className="absolute inset-5 rounded-full bg-neutral-900 border border-neutral-700 flex flex-col items-center justify-center text-center px-1">
+                                            <div className="text-[10px] text-neutral-400">已记录</div>
+                                            <div className="text-sm font-bold tabular-nums">{lifeStats.currentYearRecordedDays.toLocaleString('zh-CN')}</div>
+                                        </div>
+                                        {hoveredMoodPieSegment && (
+                                          <div className="absolute -top-2 left-1/2 -translate-x-1/2 -translate-y-full pointer-events-none px-2 py-1 rounded-md bg-black/90 border border-neutral-700 text-[11px] leading-4 whitespace-nowrap">
+                                              <div className="text-neutral-200">{hoveredMoodPieSegment.label}</div>
+                                              <div className="text-neutral-400">{hoveredMoodPieSegment.percent.toFixed(1)}%</div>
+                                          </div>
+                                        )}
+                                    </div>
+                                    <div className="flex-1 space-y-1 text-[11px]">
+                                        {lifeStats.moodSegments.map((segment) => {
+                                          return (
+                                            <div key={segment.key} className="flex items-center justify-between gap-2">
+                                              <div className="flex items-center gap-1.5 min-w-0">
+                                                <span className={`w-2 h-2 rounded-full inline-block ${segment.dotClass}`} />
+                                                <span className="truncate text-neutral-300">{segment.label}</span>
+                                              </div>
+                                              <span className="text-neutral-400 tabular-nums">{segment.count.toLocaleString('zh-CN')}</span>
+                                            </div>
+                                          );
+                                        })}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="xl:col-span-2 bg-neutral-900/50 border border-neutral-800 rounded-lg p-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                                <div>
+                                    <div className="text-sm font-semibold">本年情绪趋势（柱状 + 折线）</div>
+                                    <div className="text-[11px] text-neutral-500">X 轴：今年第几天，Y 轴：情绪值（0 未填 / 1 艰难 / 2 一般 / 3 开心）</div>
+                                </div>
+                                <div className="flex items-center gap-3 text-[11px] text-neutral-400">
+                                    <span className="flex items-center gap-1"><span className="w-3 h-1.5 rounded-sm bg-neutral-500 inline-block" />柱状</span>
+                                    <span className="flex items-center gap-1"><span className="w-3 h-[2px] rounded bg-sky-400 inline-block" />折线</span>
+                                </div>
+                            </div>
+                            <div
+                                className="relative mt-2 rounded-md border border-neutral-800 bg-black/20 p-2"
+                                onMouseMove={(e) => {
+                                    if (moodTrendChart.pointCount <= 0) return;
+                                    const rect = e.currentTarget.getBoundingClientRect();
+                                    const xWithin = Math.min(Math.max(0, e.clientX - rect.left), rect.width);
+                                    const ratio = rect.width > 0 ? xWithin / rect.width : 0;
+                                    const index = Math.min(
+                                      moodTrendChart.pointCount - 1,
+                                      Math.max(0, Math.round(ratio * (moodTrendChart.pointCount - 1)))
+                                    );
+                                    setMoodTrendHover({ index, x: xWithin, width: rect.width });
+                                }}
+                                onMouseLeave={() => setMoodTrendHover(null)}
+                            >
+                                <svg
+                                    viewBox={`0 0 ${moodTrendChart.chartWidth} ${moodTrendChart.chartHeight}`}
+                                    className="w-full h-56 sm:h-64"
+                                    preserveAspectRatio="none"
+                                >
+                                    {[0, 1, 2, 3].map((level) => {
+                                      const y = moodTrendChart.getY(level);
+                                      return (
+                                        <g key={level}>
+                                          <line
+                                            x1={moodTrendChart.margin.left}
+                                            y1={y}
+                                            x2={moodTrendChart.chartWidth - moodTrendChart.margin.right}
+                                            y2={y}
+                                            stroke="rgba(115,115,115,0.35)"
+                                            strokeWidth="1"
+                                          />
+                                          <text
+                                            x={moodTrendChart.margin.left - 8}
+                                            y={y + 4}
+                                            textAnchor="end"
+                                            fontSize="10"
+                                            fill="#9ca3af"
+                                          >
+                                            {level}
+                                          </text>
+                                        </g>
+                                      );
+                                    })}
+                                    {moodTrendChart.tickIndices.map((index) => {
+                                      const point = moodTrendChart.data[index];
+                                      if (!point) return null;
+                                      const x = moodTrendChart.getX(index);
+                                      return (
+                                        <g key={`x-tick-${index}`}>
+                                          <line
+                                            x1={x}
+                                            y1={moodTrendChart.chartHeight - moodTrendChart.margin.bottom}
+                                            x2={x}
+                                            y2={moodTrendChart.chartHeight - moodTrendChart.margin.bottom + 4}
+                                            stroke="rgba(115,115,115,0.6)"
+                                            strokeWidth="1"
+                                          />
+                                          <text
+                                            x={x}
+                                            y={moodTrendChart.chartHeight - moodTrendChart.margin.bottom + 16}
+                                            textAnchor="middle"
+                                            fontSize="10"
+                                            fill="#9ca3af"
+                                          >
+                                            {point.dayOfYear}
+                                          </text>
+                                        </g>
+                                      );
+                                    })}
+                                    {moodTrendChart.bars.map((bar) => (
+                                      <rect
+                                        key={`bar-${bar.key}`}
+                                        x={bar.x}
+                                        y={bar.y}
+                                        width={Math.max(1, bar.width)}
+                                        height={bar.height}
+                                        fill={bar.color}
+                                        opacity={0.55}
+                                      />
+                                    ))}
+                                    <polyline
+                                        points={moodTrendChart.linePoints}
+                                        fill="none"
+                                        stroke="#38bdf8"
+                                        strokeWidth="2"
+                                    />
+                                    {hoveredTrendPoint && (
+                                      <g>
+                                        <line
+                                          x1={moodTrendChart.getX(moodTrendHover.index)}
+                                          y1={moodTrendChart.margin.top}
+                                          x2={moodTrendChart.getX(moodTrendHover.index)}
+                                          y2={moodTrendChart.chartHeight - moodTrendChart.margin.bottom}
+                                          stroke="rgba(148,163,184,0.45)"
+                                          strokeDasharray="4 3"
+                                        />
+                                        <circle
+                                          cx={moodTrendChart.getX(moodTrendHover.index)}
+                                          cy={moodTrendChart.getY(hoveredTrendPoint.moodValue)}
+                                          r="4"
+                                          fill="#38bdf8"
+                                          stroke="#0f172a"
+                                          strokeWidth="1.5"
+                                        />
+                                      </g>
+                                    )}
+                                </svg>
+                                {hoveredTrendPoint && (
+                                  <div
+                                    className="absolute z-20 pointer-events-none px-2 py-1 rounded-md bg-black/90 border border-neutral-700 text-[11px] leading-4"
+                                    style={{
+                                      left: `${Math.min(Math.max(moodTrendHover.x, 84), Math.max(84, moodTrendHover.width - 84))}px`,
+                                      top: '8px',
+                                      transform: 'translateX(-50%)',
+                                    }}
+                                  >
+                                    <div className="text-neutral-200">{hoveredTrendPoint.dateKey}（第 {hoveredTrendPoint.dayOfYear} 天）</div>
+                                    <div className="text-neutral-300">情绪：{hoveredTrendPoint.moodLabel}（{hoveredTrendPoint.moodValue}）</div>
+                                    <div className="text-neutral-400 max-w-[260px] truncate">标题：{hoveredTrendPoint.title}</div>
+                                  </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </Card>
             </div>
 
             {/* 渚ц竟鏍?*/}

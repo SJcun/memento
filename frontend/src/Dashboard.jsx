@@ -6,6 +6,7 @@ import {
   Download, FileText, Maximize2, LogOut, UserPlus
 } from 'lucide-react';
 import EmojiPicker from 'emoji-picker-react';
+import emojisZhData from 'emoji-picker-react/dist/data/emojis-zh';
 import axios from 'axios';
 import { fetchGoals, createGoal, updateGoal, deleteGoal, updateUserPassword } from './api';
 
@@ -156,11 +157,30 @@ const moodConfig = {
   'hard': { label: '艰难 😔', color: 'bg-red-500 border-red-600' }
 };
 
+const emojiPickerCategories = [
+  { category: 'suggested', name: '常用' },
+  { category: 'smileys_people', name: '笑脸与人物' },
+  { category: 'animals_nature', name: '动物与自然' },
+  { category: 'food_drink', name: '食物与饮品' },
+  { category: 'travel_places', name: '旅行与地点' },
+  { category: 'activities', name: '活动' },
+  { category: 'objects', name: '物品' },
+  { category: 'symbols', name: '符号' },
+  { category: 'flags', name: '旗帜' }
+];
+
+const emojiPickerPreviewConfig = {
+  defaultCaption: '你今天心情如何？',
+};
+
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const MS_PER_WEEK = MS_PER_DAY * 7;
 const diffInDays = (d1, d2) => Math.floor((d1 - d2) / MS_PER_DAY);
 const diffInWeeks = (d1, d2) => Math.floor((d1 - d2) / MS_PER_WEEK);
-const formatDate = (date) => date.toISOString().split('T')[0];
+const formatDate = (dateLike) => {
+  const date = new Date(dateLike);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+};
 
 const calculateLifeClock = (dob, lifeExpectancy = 100) => {
   const now = new Date();
@@ -607,7 +627,7 @@ export default function Dashboard({ userConfig, onLogout }) {
     if (isCompleting) {
       // 标记为完成：记录完成时间
       const now = new Date();
-      updateData.completed_at = now.toISOString().split('T')[0]; // YYYY-MM-DD格式
+      updateData.completed_at = formatDate(now); // YYYY-MM-DD格式
       updateData.week_year = getAgeAtDate(now);
       updateData.week_index = null;
     } else {
@@ -1045,7 +1065,7 @@ export default function Dashboard({ userConfig, onLogout }) {
       }
 
       const content = await zip.generateAsync({type:"blob"});
-      saveAs(content, `拾光记忆_导出_${new Date().toISOString().split('T')[0]}.zip`);
+      saveAs(content, `拾光记忆_导出_${formatDate(new Date())}.zip`);
       setIsExporting(false);
       setIsExportModalOpen(false);
   };
@@ -1187,6 +1207,15 @@ export default function Dashboard({ userConfig, onLogout }) {
                         >
                           <ChevronLeft size={14} />
                         </button>
+                        <select
+                          value={heatmapYear}
+                          onChange={(e) => setHeatmapYear(Number(e.target.value))}
+                          className="bg-black border border-neutral-700 rounded px-2 py-1 text-xs text-white"
+                        >
+                          {heatmapYears.map((year) => (
+                            <option key={year} value={year}>{year}</option>
+                          ))}
+                        </select>
                         <button
                           onClick={() => {
                             const index = heatmapYears.indexOf(heatmapYear);
@@ -1526,7 +1555,11 @@ export default function Dashboard({ userConfig, onLogout }) {
                                     width={320}
                                     height={400}
                                     theme="dark"
+                                    emojiData={emojisZhData}
+                                    categories={emojiPickerCategories}
+                                    previewConfig={emojiPickerPreviewConfig}
                                     searchPlaceholder="搜索表情..."
+                                    searchClearButtonLabel="清除"
                                     emojiStyle="native"
                                 />
                             </div>
@@ -1571,7 +1604,11 @@ export default function Dashboard({ userConfig, onLogout }) {
                                     width={320}
                                     height={400}
                                     theme="dark"
+                                    emojiData={emojisZhData}
+                                    categories={emojiPickerCategories}
+                                    previewConfig={emojiPickerPreviewConfig}
                                     searchPlaceholder="搜索表情..."
+                                    searchClearButtonLabel="清除"
                                     emojiStyle="native"
                                 />
                             </div>

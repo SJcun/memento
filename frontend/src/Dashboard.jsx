@@ -40,10 +40,9 @@ const fetchEvents = async () => {
   return res.data;
 };
 
-const saveEventToBackend = async (yearIdx, weekIdx, data) => {
+const saveEventToBackend = async (entryDate, data) => {
   const formData = new FormData();
-  formData.append('year_idx', yearIdx);
-  formData.append('week_idx', weekIdx);
+  formData.append('entry_date', entryDate);
   if (data.title) formData.append('title', data.title);
   if (data.content) formData.append('content', data.content);
   if (data.mood) formData.append('mood', data.mood);
@@ -55,12 +54,12 @@ const saveEventToBackend = async (yearIdx, weekIdx, data) => {
     });
   }
 
-  // 发送要保留的现有图片URL（过滤掉null/无效值）
+  // 鍙戦€佽淇濈暀鐨勭幇鏈夊浘鐗嘦RL锛堣繃婊ゆ帀null/鏃犳晥鍊硷級
   if (data.imagesOriginal && Array.isArray(data.imagesOriginal)) {
     const validOriginalUrls = data.imagesOriginal.filter(url => url && typeof url === 'string' && url.trim() !== '');
     formData.append('keep_images', JSON.stringify(validOriginalUrls));
   } else {
-    // 如果没有现有图片，发送空数组以清空已删除的图片
+    // 濡傛灉娌℃湁鐜版湁鍥剧墖锛屽彂閫佺┖鏁扮粍浠ユ竻绌哄凡鍒犻櫎鐨勫浘鐗?
     formData.append('keep_images', JSON.stringify([]));
   }
 
@@ -102,7 +101,7 @@ const uploadAvatar = async (file) => {
     return res.data;
 }
 
-// --- 纪念日/计划日API ---
+// --- 绾康鏃?璁″垝鏃PI ---
 const fetchSpecialDays = async () => {
     const res = await api.get('/special-days');
     return res.data;
@@ -128,7 +127,7 @@ const fetchUpcomingSpecialDays = async (days = 7) => {
     return res.data;
 }
 
-// --- 动态加载导出库 ---
+// --- 鍔ㄦ€佸姞杞藉鍑哄簱 ---
 const loadScript = (src) => {
   return new Promise((resolve, reject) => {
     if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
@@ -209,9 +208,9 @@ export default function Dashboard({ userConfig, onLogout }) {
   const [specialDays, setSpecialDays] = useState([]);
   const [upcomingReminders, setUpcomingReminders] = useState([]);
 
-  const [selectedWeek, setSelectedWeek] = useState(null);
+  const [selectedDate, setSelectedDate] = useState(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  // 表情选择器状态
+  // 琛ㄦ儏閫夋嫨鍣ㄧ姸鎬?
   const [showTitleEmojiPicker, setShowTitleEmojiPicker] = useState(false);
   const [showContentEmojiPicker, setShowContentEmojiPicker] = useState(false);
   const [isGalleryOpen, setIsGalleryOpen] = useState(false);
@@ -222,7 +221,7 @@ export default function Dashboard({ userConfig, onLogout }) {
   const [isPreviewFullScreen, setIsPreviewFullScreen] = useState(false);
   const [isGalleryFullScreen, setIsGalleryFullScreen] = useState(false);
   
-  // 管理员注册相关
+  // 绠＄悊鍛樻敞鍐岀浉鍏?
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
   const [newUserForm, setNewUserForm] = useState({ username: '', password: '' });
   // 用户信息编辑相关
@@ -240,7 +239,7 @@ export default function Dashboard({ userConfig, onLogout }) {
   });
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [passwordError, setPasswordError] = useState('');
-  // 纪念日/计划日相关
+  // 绾康鏃?璁″垝鏃ョ浉鍏?
   const [isSpecialDaysModalOpen, setIsSpecialDaysModalOpen] = useState(false);
   const [tempSpecialDay, setTempSpecialDay] = useState({
     title: '',
@@ -252,8 +251,9 @@ export default function Dashboard({ userConfig, onLogout }) {
   // 日历相关
   const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
   const [calendarView, setCalendarView] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() });
+  const [heatmapYear, setHeatmapYear] = useState(new Date().getFullYear());
 
-  // 辅助函数：计算给定目标日期时的年龄（完整年数）
+  // 杈呭姪鍑芥暟锛氳绠楃粰瀹氱洰鏍囨棩鏈熸椂鐨勫勾榫勶紙瀹屾暣骞存暟锛?
   const getAgeAtDate = (targetDate) => {
     if (!config || !config.dob) return 0;
     let birthDate;
@@ -273,55 +273,44 @@ export default function Dashboard({ userConfig, onLogout }) {
     return Math.max(0, age);
   };
 
-  // 计算用户当前年龄（从出生日期到今天的完整年数）
-  const getCurrentAge = () => {
-    return getAgeAtDate(new Date());
-  };
-
-  const [viewYear, setViewYear] = useState(() => getCurrentAge());
   const [exportRange, setExportRange] = useState({ start: '', end: '' });
 
-  // 临时状态
+  // 涓存椂鐘舵€?
   const [tempEvent, setTempEvent] = useState({ title: '', content: '', mood: 'neutral', images: [], imagesOriginal: [], imageFiles: [] });
   const [tempGoal, setTempGoal] = useState('');
-  const [dobYear, setDobYear] = useState(new Date().getFullYear() - 25); // 默认25岁
+  const [dobYear, setDobYear] = useState(new Date().getFullYear() - 25); // 榛樿25宀?
   const [dobMonth, setDobMonth] = useState(1); // 1-12
   const [dobDay, setDobDay] = useState(1); // 1-31
   const fileInputRef = useRef(null);
   const avatarInputRef = useRef(null);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
 
-  // 初始化加载数据
+  // 鍒濆鍖栧姞杞芥暟鎹?
   useEffect(() => {
     if (config && config.dob && !isNaN(new Date(config.dob).getTime())) {
-        // 1. 设置初始视图年份
-        const birthDate = new Date(config.dob);
-        const age = Math.round(diffInDays(new Date(), birthDate) / 365.25);
-        const lifeExpectancy = config.lifeExpectancy || 100;
-        setViewYear(Math.max(0, Math.min(age, lifeExpectancy - 1)));
         setExportRange({ start: config.dob, end: formatDate(new Date()) });
 
-        // 2. 从后端加载数据
+        // 2. 浠庡悗绔姞杞芥暟鎹?
         fetchEvents().then(data => {
             setEvents(data);
         }).catch(err => console.error("加载数据失败", err));
     }
   }, [config]);
 
-  // 加载目标数据（包含从localStorage迁移）
+  // 鍔犺浇鐩爣鏁版嵁锛堝寘鍚粠localStorage杩佺Щ锛?
   useEffect(() => {
     if (!config) return;
 
     const migrateLocalGoals = async () => {
       try {
-        // 检查localStorage中是否有旧数据
+        // 妫€鏌ocalStorage涓槸鍚︽湁鏃ф暟鎹?
         const localGoalsStr = localStorage.getItem('memento_goals');
         if (localGoalsStr) {
           const localGoals = JSON.parse(localGoalsStr);
           if (Array.isArray(localGoals) && localGoals.length > 0) {
-            console.log(`发现 ${localGoals.length} 个本地目标，开始迁移到云端...`);
+            console.log(`鍙戠幇 ${localGoals.length} 涓湰鍦扮洰鏍囷紝寮€濮嬭縼绉诲埌浜戠...`);
 
-            // 逐个迁移目标到后端
+            // 閫愪釜杩佺Щ鐩爣鍒板悗绔?
             for (const localGoal of localGoals) {
               try {
                 const goalData = {
@@ -344,7 +333,7 @@ export default function Dashboard({ userConfig, onLogout }) {
           }
         }
       } catch (err) {
-        console.error("目标迁移过程中出错", err);
+        console.error('目标迁移过程中出错', err);
       }
     };
 
@@ -353,7 +342,7 @@ export default function Dashboard({ userConfig, onLogout }) {
         // 首先尝试迁移本地数据（如果存在）
         await migrateLocalGoals();
 
-        // 然后从后端加载数据
+        // 鐒跺悗浠庡悗绔姞杞芥暟鎹?
         const data = await fetchGoals();
         // 转换字段名：从蛇形命名法转换为camelCase
         const convertedData = data.map(goal => ({
@@ -374,7 +363,7 @@ export default function Dashboard({ userConfig, onLogout }) {
     loadGoals();
   }, [config]);
 
-  // 本地持久化 (仅 Chronicles 存储在本地，因为 Events 和 Goals 已上云)
+  // 鏈湴鎸佷箙鍖?(浠?Chronicles 瀛樺偍鍦ㄦ湰鍦帮紝鍥犱负 Events 鍜?Goals 宸蹭笂浜?
   useEffect(() => { localStorage.setItem('memento_chronicles', JSON.stringify(chronicles)); }, [chronicles]);
 
   // 更新用户信息
@@ -388,22 +377,22 @@ export default function Dashboard({ userConfig, onLogout }) {
       if (config.dob) {
         const dobDate = new Date(config.dob);
         setDobYear(dobDate.getFullYear());
-        setDobMonth(dobDate.getMonth() + 1); // 月份从0开始
+        setDobMonth(dobDate.getMonth() + 1); // 鏈堜唤浠?寮€濮?
         setDobDay(dobDate.getDate());
       }
     }
   }, [config]);
 
-  // 加载纪念日数据
+  // 鍔犺浇绾康鏃ユ暟鎹?
   useEffect(() => {
     if (config && config.dob) {
       fetchSpecialDays().then(data => {
         setSpecialDays(data);
-      }).catch(err => console.error("加载纪念日失败", err));
+      }).catch(err => console.error('加载纪念日失败', err));
     }
   }, [config]);
 
-  // 检查纪念日提醒
+  // 妫€鏌ョ邯蹇垫棩鎻愰啋
   useEffect(() => {
     if (specialDays.length > 0) {
       fetchUpcomingSpecialDays(7).then(data => {
@@ -413,16 +402,16 @@ export default function Dashboard({ userConfig, onLogout }) {
           const notificationMessage = `你有 ${data.length} 个即将到来的纪念日：\n` +
             data.map(d => `${d.title}（${d.days_until}天后）`).join('\n');
           alert(notificationMessage);
-          // 未来可以改为浏览器通知
+          // 鏈潵鍙互鏀逛负娴忚鍣ㄩ€氱煡
           // if (Notification.permission === "granted") {
-          //   new Notification("纪念日提醒", { body: notificationMessage });
+          //   new Notification("绾康鏃ユ彁閱?, { body: notificationMessage });
           // }
         }
-      }).catch(err => console.error("检查提醒失败", err));
+      }).catch(err => console.error('检查提醒失败', err));
     }
   }, [specialDays]);
 
-  // 计算属性
+  // 璁＄畻灞炴€?
   const stats = useMemo(() => {
     if (!config || !config.dob) return null;
     return {
@@ -437,22 +426,22 @@ export default function Dashboard({ userConfig, onLogout }) {
   const galleryImages = useMemo(() => {
     const imagesList = [];
 
-    Object.entries(events).forEach(([id, event]) => {
+    Object.entries(events).forEach(([dateKey, event]) => {
       if (!event) return;
-
-      const [yearIdx, weekIdx] = id.split('-').map(Number);
+      const entryDate = new Date(`${dateKey}T00:00:00`);
+      if (Number.isNaN(entryDate.getTime())) return;
 
       // 获取事件的所有图片
       let images = [];
       if (event.images && event.images.length > 0) {
-        // 使用多图片数组
+        // 浣跨敤澶氬浘鐗囨暟缁?
         images = event.images.map((imageUrl, index) => ({
           image: imageUrl,
           imageOriginal: event.imagesOriginal?.[index] || null,
           index
         }));
       } else if (event.image) {
-        // 向后兼容：单个图片
+        // 鍚戝悗鍏煎锛氬崟涓浘鐗?
         images = [{
           image: event.image,
           imageOriginal: event.imageOriginal || null,
@@ -463,10 +452,10 @@ export default function Dashboard({ userConfig, onLogout }) {
       // 为每张图片创建独立的相册项目
       images.forEach((img, imgIndex) => {
         imagesList.push({
-          id: `${id}-${imgIndex}`, // 唯一ID
-          eventId: id,
-          yearIdx,
-          weekIdx,
+          id: `${dateKey}-${imgIndex}`, // 唯一ID
+          eventId: dateKey,
+          dateKey,
+          entryDate,
           image: img.image,
           imageOriginal: img.imageOriginal,
           eventTitle: event.title,
@@ -476,39 +465,36 @@ export default function Dashboard({ userConfig, onLogout }) {
       });
     });
 
-    // 按时间排序：先按年份，再按周数
-    return imagesList.sort((a, b) => {
-      if (b.yearIdx !== a.yearIdx) return b.yearIdx - a.yearIdx;
-      return b.weekIdx - a.weekIdx;
-    });
+    // 鎸夋椂闂村€掑簭
+    return imagesList.sort((a, b) => b.entryDate - a.entryDate);
   }, [events]);
 
-  // 过滤目标：只显示未完成或最近3天内完成的目标
+  // 杩囨护鐩爣锛氬彧鏄剧ず鏈畬鎴愭垨鏈€杩?澶╁唴瀹屾垚鐨勭洰鏍?
   const filteredGoals = useMemo(() => {
     const now = new Date();
     const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
 
     return goals.filter(g => {
       if (!g.completed) return true; // 未完成的目标总是显示
-      if (!g.completedAt) return false; // 已完成但没有时间戳，不显示
+      if (!g.completedAt) return false; // 宸插畬鎴愪絾娌℃湁鏃堕棿鎴筹紝涓嶆樉绀?
 
       const completedDate = new Date(g.completedAt);
-      return completedDate >= threeDaysAgo; // 只显示最近3天内完成的
+      return completedDate >= threeDaysAgo; // 鍙樉绀烘渶杩?澶╁唴瀹屾垚鐨?
     });
   }, [goals]);
 
-  // 修改点2：重写 handleOnboarding，调用后端保存生日
+  // 淇敼鐐?锛氶噸鍐?handleOnboarding锛岃皟鐢ㄥ悗绔繚瀛樼敓鏃?
   const handleOnboarding = async (e) => {
     e.preventDefault();
-    // 构建日期字符串 YYYY-MM-DD
+    // 鏋勫缓鏃ユ湡瀛楃涓?YYYY-MM-DD
     const dobStr = `${dobYear}-${dobMonth.toString().padStart(2, '0')}-${dobDay.toString().padStart(2, '0')}`;
     try {
         // 1. 调用后端保存
         const res = await updateUserConfig(dobStr, 100);
-        // 2. 更新本地状态，触发界面刷新
+        // 2. 鏇存柊鏈湴鐘舵€侊紝瑙﹀彂鐣岄潰鍒锋柊
         const newConfig = { ...config, ...res.user_config };
         setConfig(newConfig);
-        // 3. 更新缓存，防止刷新丢失
+        // 3. 鏇存柊缂撳瓨锛岄槻姝㈠埛鏂颁涪澶?
         localStorage.setItem('user_config', JSON.stringify(newConfig));
     } catch (err) {
         alert("保存失败，请检查网络");
@@ -516,119 +502,99 @@ export default function Dashboard({ userConfig, onLogout }) {
   };
 
 
-  // 辅助函数：获取日期所在周的周一
-  const getMondayOfWeek = (date) => {
-    const d = new Date(date);
-    const day = d.getDay(); // 0=周日, 1=周一, ..., 6=周六
-    // 计算到上周一的差值：如果周日，减去6天；否则，减去(day-1)天
-    const diff = day === 0 ? -6 : 1 - day;
-    d.setDate(d.getDate() + diff);
-    // 设置为当天开始时间
+  const startOfDay = (dateLike) => {
+    const d = new Date(dateLike);
     d.setHours(0, 0, 0, 0);
     return d;
   };
 
-  // 辅助函数：获取日期对应的日历周信息（基于周一为一周开始）
-  const getCalendarWeekInfo = (date) => {
-    const targetDate = new Date(date);
-    targetDate.setHours(0, 0, 0, 0);
-
-    // 1. 找到目标日期所在周的周一
-    const mondayOfWeek = getMondayOfWeek(targetDate);
-
-    // 2. 确定周的年份：使用该周的周四（周一+3天）所在的年份
-    const thursdayOfWeek = new Date(mondayOfWeek);
-    thursdayOfWeek.setDate(thursdayOfWeek.getDate() + 3);
-    const weekYear = thursdayOfWeek.getFullYear();
-
-    // 3. 找到该年第一个周四
-    const firstThursdayOfYear = new Date(weekYear, 0, 4); // 1月4日总是属于第一周
-    const firstMondayOfYear = getMondayOfWeek(firstThursdayOfYear);
-
-    // 4. 计算周索引
-    const diffInMs = mondayOfWeek.getTime() - firstMondayOfYear.getTime();
-    const diffInDays = diffInMs / (1000 * 60 * 60 * 24);
-    let weekIndex = Math.floor(diffInDays / 7);
-
-    // 处理边界情况：如果周索引为负数，则属于上一年的最后一周
-    if (weekIndex < 0) {
-      // 重新计算上一年的周信息
-      const prevYear = weekYear - 1;
-      const prevYearThursday = new Date(prevYear, 0, 4);
-      const prevYearMonday = getMondayOfWeek(prevYearThursday);
-      const diffInMsPrev = mondayOfWeek.getTime() - prevYearMonday.getTime();
-      const diffInDaysPrev = diffInMsPrev / (1000 * 60 * 60 * 24);
-      weekIndex = Math.floor(diffInDaysPrev / 7);
-      // 返回上一年的信息
-      return { year: prevYear, weekIndex };
-    }
-
-    // 处理周索引超过51的情况（理论上不应该发生，但安全起见）
-    if (weekIndex >= 52) {
-      weekIndex = 51;
-    }
-
-    return { year: weekYear, weekIndex };
+  const addDays = (dateLike, days) => {
+    const d = startOfDay(dateLike);
+    d.setDate(d.getDate() + days);
+    return d;
   };
 
-  // 辅助函数：获取日期对应的周ID（与网格中的年-周索引一致）
-  const getWeekIdFromDate = (date) => {
-    if (!config || !config.dob) return null;
-
-    const birthDate = new Date(config.dob);
-
-    // 1. 找到日期所在周的周一
-    const mondayOfWeek = getMondayOfWeek(date);
-
-    // 2. 计算周一的年龄（与viewYear计算逻辑一致）
-    const yearIdx = getAgeAtDate(mondayOfWeek);
-
-    // 3. 计算对应的日历年份
-    const displayYear = birthDate.getFullYear() + yearIdx;
-
-    // 4. 找到该年第一周周一
-    const firstMondayOfYear = getDateFromWeekInfo(displayYear, 0);
-
-    // 5. 计算周索引
-    const diffInMs = mondayOfWeek.getTime() - firstMondayOfYear.getTime();
-    const diffInDays = diffInMs / (1000 * 60 * 60 * 24);
-    let weekIdx = Math.floor(diffInDays / 7);
-
-    // 调整weekIdx到0-51范围（理论上应该在范围内，但安全起见）
-    if (weekIdx < 0) {
-      // 如果为负数，可能mondayOfWeek属于上一年的最后一周
-      // 重新计算上一年的信息
-      const prevDisplayYear = displayYear - 1;
-      const prevFirstMonday = getDateFromWeekInfo(prevDisplayYear, 0);
-      const diffInMsPrev = mondayOfWeek.getTime() - prevFirstMonday.getTime();
-      const diffInDaysPrev = diffInMsPrev / (1000 * 60 * 60 * 24);
-      weekIdx = Math.floor(diffInDaysPrev / 7);
-      // 年索引也需要减1
-      return { yearIdx: yearIdx - 1, weekIdx };
-    }
-
-    if (weekIdx >= 52) {
-      // 如果超过51，可能属于下一年的第一周
-      weekIdx = 0;
-      // 年索引加1
-      return { yearIdx: yearIdx + 1, weekIdx: 0 };
-    }
-
-    return { yearIdx, weekIdx };
+  const toDateKey = (dateLike) => {
+    return formatDate(startOfDay(dateLike));
   };
 
-  // 辅助函数：根据年份和周索引获取该周周一的日期
-  const getDateFromWeekInfo = (year, weekIndex) => {
-    // 找到该年第一个周四（1月4日总是属于第一周）
-    const firstThursday = new Date(year, 0, 4);
-    const firstMonday = getMondayOfWeek(firstThursday);
+  const heatmapYears = useMemo(() => {
+    const currentYear = new Date().getFullYear();
+    const years = new Set([currentYear]);
 
-    // 计算目标周周一的日期
-    const targetMonday = new Date(firstMonday);
-    targetMonday.setDate(targetMonday.getDate() + weekIndex * 7);
+    if (config?.dob) {
+      const dobDate = new Date(config.dob);
+      if (!Number.isNaN(dobDate.getTime())) {
+        years.add(dobDate.getFullYear());
+      }
+    }
 
-    return targetMonday;
-  };
+    Object.keys(events).forEach((dateKey) => {
+      const y = Number(dateKey.slice(0, 4));
+      if (!Number.isNaN(y)) {
+        years.add(y);
+      }
+    });
+
+    const allYears = Array.from(years);
+    const minYear = Math.min(...allYears);
+    const maxYear = Math.max(...allYears);
+    const yearRange = [];
+    for (let y = maxYear; y >= minYear; y--) {
+      yearRange.push(y);
+    }
+    return yearRange;
+  }, [config?.dob, events]);
+
+  useEffect(() => {
+    if (!heatmapYears.includes(heatmapYear) && heatmapYears.length > 0) {
+      setHeatmapYear(heatmapYears[0]);
+    }
+  }, [heatmapYear, heatmapYears]);
+
+  const heatmapWeeks = useMemo(() => {
+    if (!heatmapYears.includes(heatmapYear)) {
+      return [];
+    }
+
+    const today = startOfDay(new Date());
+    const yearStart = startOfDay(new Date(heatmapYear, 0, 1));
+    const yearEnd = startOfDay(new Date(heatmapYear, 11, 31));
+    const startOffset = (yearStart.getDay() + 6) % 7; // Monday=0
+    const endOffset = 6 - ((yearEnd.getDay() + 6) % 7); // Sunday=6
+    const gridStart = addDays(yearStart, -startOffset);
+    const gridEnd = addDays(yearEnd, endOffset);
+    const weeks = [];
+
+    for (let weekStart = gridStart; weekStart <= gridEnd; weekStart = addDays(weekStart, 7)) {
+      const days = [];
+      for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
+        const currentDate = addDays(weekStart, dayOffset);
+        const dateKey = toDateKey(currentDate);
+        const inYear = currentDate.getFullYear() === heatmapYear;
+        const evt = inYear ? events[dateKey] : null;
+        const isFuture = inYear && currentDate > today;
+        const isToday = currentDate.getTime() === today.getTime();
+        const intensity = evt ? (evt.mood === 'hard' ? 3 : evt.mood === 'joy' ? 2 : 1) : 0;
+
+        days.push({
+          date: currentDate,
+          dateKey,
+          event: evt,
+          inYear,
+          isFuture,
+          isToday,
+          intensity,
+        });
+      }
+      weeks.push({
+        weekStart,
+        days,
+      });
+    }
+
+    return weeks;
+  }, [events, heatmapYear, heatmapYears]);
 
   // 处理目标完成/取消完成
   const handleGoalToggle = async (goalId) => {
@@ -639,14 +605,13 @@ export default function Dashboard({ userConfig, onLogout }) {
     let updateData = { completed: isCompleting };
 
     if (isCompleting) {
-      // 标记为完成：记录完成时间和周信息
+      // 标记为完成：记录完成时间
       const now = new Date();
-      const weekId = getWeekIdFromDate(now);
       updateData.completed_at = now.toISOString().split('T')[0]; // YYYY-MM-DD格式
-      updateData.week_year = weekId?.yearIdx;
-      updateData.week_index = weekId?.weekIdx;
+      updateData.week_year = getAgeAtDate(now);
+      updateData.week_index = null;
     } else {
-      // 取消完成：清除完成信息
+      // 鍙栨秷瀹屾垚锛氭竻闄ゅ畬鎴愪俊鎭?
       updateData.completed_at = null;
       updateData.week_year = null;
       updateData.week_index = null;
@@ -654,7 +619,7 @@ export default function Dashboard({ userConfig, onLogout }) {
 
     try {
       const updatedGoal = await updateGoal(goalId, updateData);
-      // 转换字段名并更新本地状态
+      // 杞崲瀛楁鍚嶅苟鏇存柊鏈湴鐘舵€?
       const convertedGoal = {
         id: updatedGoal.id,
         text: updatedGoal.text,
@@ -670,7 +635,7 @@ export default function Dashboard({ userConfig, onLogout }) {
     }
   };
 
-  // 添加新目标
+  // 娣诲姞鏂扮洰鏍?
   const handleAddGoal = async () => {
     if (!tempGoal.trim()) return;
 
@@ -681,7 +646,7 @@ export default function Dashboard({ userConfig, onLogout }) {
 
     try {
       const createdGoal = await createGoal(newGoalData);
-      // 转换字段名
+      // 杞崲瀛楁鍚?
       const convertedGoal = {
         id: createdGoal.id,
         text: createdGoal.text,
@@ -708,40 +673,17 @@ export default function Dashboard({ userConfig, onLogout }) {
     }
   };
 
-  // 处理器
-  const handleGridClick = (yearIdx, weekIdx) => {
-    // 检查是否为未来时间
-    if (config && config.dob) {
-      // 解析出生日期，处理字符串或Date对象
-      let birthDate;
-      if (typeof config.dob === 'string') {
-        const dobParts = config.dob.split('-');
-        birthDate = new Date(parseInt(dobParts[0]), parseInt(dobParts[1]) - 1, parseInt(dobParts[2]));
-      } else {
-        birthDate = new Date(config.dob);
-      }
-
-      // 计算显示的日历年份
-      const displayYear = birthDate.getFullYear() + yearIdx;
-      // 计算点击的周的开始日期（基于日历周，周一为一周开始）
-      const clickedWeekStart = getDateFromWeekInfo(displayYear, weekIdx);
-
-      // 获取今天的日期（只比较日期，不比较时间）
-      const today = new Date();
-      const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-
-      // 如果周的开始日期晚于今天，则是未来时间
-      if (clickedWeekStart > todayStart) {
-        alert("不能记录未来的时间！只能填写已经过去或正在进行的周。");
-        return;
-      }
+  // Open event editor from the calendar grid.
+  const handleGridClick = (dateKey, isFuture) => {
+    if (isFuture) {
+      alert("不能记录未来的时间！只能填写已经过去或今天的记忆。");
+      return;
     }
 
-    const weekId = `${yearIdx}-${weekIdx}`;
-    const existing = events[weekId] || { title: '', content: '', mood: 'neutral', image: '', imageOriginal: '', images: [], imagesOriginal: [] };
-    setSelectedWeek({ yearIdx, weekIdx, weekId });
+    const existing = events[dateKey] || { title: '', content: '', mood: 'neutral', image: '', imageOriginal: '', images: [], imagesOriginal: [] };
+    setSelectedDate({ dateKey, date: new Date(`${dateKey}T00:00:00`) });
 
-    // 处理向后兼容：如果只有单个图片字段，转换为数组
+    // 澶勭悊鍚戝悗鍏煎锛氬鏋滃彧鏈夊崟涓浘鐗囧瓧娈碉紝杞崲涓烘暟缁?
     const images = existing.images || (existing.image ? [existing.image] : []);
     const imagesOriginal = existing.imagesOriginal || (existing.imageOriginal ? [existing.imageOriginal] : []);
 
@@ -776,19 +718,19 @@ export default function Dashboard({ userConfig, onLogout }) {
         };
       });
     }
-    // 清空文件输入，允许再次选择相同文件
+    // 娓呯┖鏂囦欢杈撳叆锛屽厑璁稿啀娆￠€夋嫨鐩稿悓鏂囦欢
     e.target.value = '';
   };
 
-  // 处理粘贴板图片
+  // 澶勭悊绮樿创鏉垮浘鐗?
   const handlePaste = (e) => {
-    // 只在编辑模态框打开时处理
+    // 鍙湪缂栬緫妯℃€佹鎵撳紑鏃跺鐞?
     if (!isEditModalOpen) return;
 
     const clipboardData = e.clipboardData || window.clipboardData;
     if (!clipboardData) return;
 
-    // 检查是否粘贴到输入框，如果是输入框且有文本内容，不处理图片
+    // 妫€鏌ユ槸鍚︾矘璐村埌杈撳叆妗嗭紝濡傛灉鏄緭鍏ユ涓旀湁鏂囨湰鍐呭锛屼笉澶勭悊鍥剧墖
     const activeElement = document.activeElement;
     const isInputField = activeElement?.tagName === 'INPUT' || activeElement?.tagName === 'TEXTAREA';
     const hasText = clipboardData.getData('text').trim().length > 0;
@@ -796,7 +738,7 @@ export default function Dashboard({ userConfig, onLogout }) {
     // 如果是输入框且有文本，让默认粘贴行为生效
     if (isInputField && hasText) return;
 
-    // 查找粘贴板中的图片
+    // 鏌ユ壘绮樿创鏉夸腑鐨勫浘鐗?
     const items = clipboardData.items;
     const imageFiles = [];
 
@@ -805,7 +747,7 @@ export default function Dashboard({ userConfig, onLogout }) {
       if (item.type.indexOf('image') !== -1) {
         const file = item.getAsFile();
         if (file) {
-          // 为粘贴的图片添加合适的文件名
+          // 涓虹矘璐寸殑鍥剧墖娣诲姞鍚堥€傜殑鏂囦欢鍚?
           const timestamp = Date.now();
           const ext = file.type.split('/')[1] || 'png';
           const renamedFile = new File([file], `clipboard-${timestamp}.${ext}`, { type: file.type });
@@ -847,12 +789,12 @@ export default function Dashboard({ userConfig, onLogout }) {
   }, [isEditModalOpen, tempEvent]);
 
   const handleSaveEvent = async () => {
-    if (selectedWeek) {
+    if (selectedDate) {
       try {
         // 调用后端 API 保存
-        await saveEventToBackend(selectedWeek.yearIdx, selectedWeek.weekIdx, tempEvent);
+        await saveEventToBackend(selectedDate.dateKey, tempEvent);
         
-        // 重新获取最新数据 (或者可以优化为只更新本地状态)
+        // 閲嶆柊鑾峰彇鏈€鏂版暟鎹?(鎴栬€呭彲浠ヤ紭鍖栦负鍙洿鏂版湰鍦扮姸鎬?
         const updatedData = await fetchEvents();
         setEvents(updatedData);
         
@@ -878,7 +820,7 @@ export default function Dashboard({ userConfig, onLogout }) {
   const handleSaveProfile = async (e) => {
       e.preventDefault();
       try {
-          // 构建日期字符串 YYYY-MM-DD
+          // 鏋勫缓鏃ユ湡瀛楃涓?YYYY-MM-DD
           const dobStr = `${dobYear}-${dobMonth.toString().padStart(2, '0')}-${dobDay.toString().padStart(2, '0')}`;
           const res = await updateUserProfile(
               dobStr,
@@ -890,7 +832,7 @@ export default function Dashboard({ userConfig, onLogout }) {
           const newConfig = { ...config, ...res.user_config };
           setConfig(newConfig);
           localStorage.setItem('user_config', JSON.stringify(newConfig));
-          // 更新用户资料状态
+          // 鏇存柊鐢ㄦ埛璧勬枡鐘舵€?
           setUserProfile({
               nickname: res.user_config.nickname || userProfile.nickname,
               avatar: res.user_config.avatar_url || userProfile.avatar
@@ -985,17 +927,13 @@ export default function Dashboard({ userConfig, onLogout }) {
       const zip = new JSZip();
       const imgFolder = zip.folder("images");
 
-      const dob = new Date(config.dob);
-      const birthYear = dob.getFullYear();
       const start = new Date(exportRange.start);
       const end = new Date(exportRange.end);
 
-      // 计算周日期时使用日历年方式（与显示逻辑一致）
-      const eventsToExport = Object.entries(events).map(([id, evt]) => {
-          const [y, w] = id.split('-').map(Number);
-          const displayYear = birthYear + y;
-          const weekDate = new Date(displayYear, 0, 1 + w * 7);
-          return { ...evt, id, date: weekDate, yearIdx: y, weekIdx: w, displayYear };
+      // 按日期导出日记
+      const eventsToExport = Object.entries(events).map(([dateKey, evt]) => {
+          const entryDate = new Date(`${dateKey}T00:00:00`);
+          return { ...evt, dateKey, date: entryDate };
       }).filter(evt => evt.date >= start && evt.date <= end).sort((a, b) => a.date - b.date);
 
       if (eventsToExport.length === 0) { alert("无记录"); setIsExporting(false); return; }
@@ -1014,21 +952,19 @@ export default function Dashboard({ userConfig, onLogout }) {
           return match ? match[1].toLowerCase() : 'jpg';
       };
 
-      // 处理每一周的记录
+      // 处理每一天的记录
       for (let i = 0; i < eventsToExport.length; i++) {
           const evt = eventsToExport[i];
-          const year = evt.displayYear;
-          const weekNum = evt.weekIdx + 1;
+          const dateLabel = evt.dateKey;
           const title = sanitizeFileName(evt.title);
 
-          // 文件名格式：年份_第几周_标题
-          const baseFileName = `${year}_第${weekNum}周_${title}`;
+          // 文件名格式：日期_标题
+          const baseFileName = `${dateLabel}_${title}`;
 
           // 创建 Markdown 内容
           let mdContent = `# ${evt.title || '无标题'}\n\n`;
-          mdContent += `**年份**: ${year}年  \n`;
-          mdContent += `**周数**: 第${weekNum}周  \n`;
-          mdContent += `**心情**: ${evt.mood || '未记录'}  \n\n`;
+          mdContent += `**日期**: ${dateLabel}  \n`;
+          mdContent += `**心情**: ${evt.mood || '无记录'}  \n\n`;
 
           if (evt.content) {
               mdContent += `## 内容\n\n${evt.content}\n\n`;
@@ -1047,7 +983,7 @@ export default function Dashboard({ userConfig, onLogout }) {
               else if (evt.image) allImages.push(evt.image);
           }
 
-          // 下载并保存图片
+          // 涓嬭浇骞朵繚瀛樺浘鐗?
           const savedImageNames = [];
           for (let imgIdx = 0; imgIdx < allImages.length; imgIdx++) {
               const imgUrl = allImages[imgIdx];
@@ -1056,10 +992,10 @@ export default function Dashboard({ userConfig, onLogout }) {
               try {
                   let imgBlob;
                   const ext = getImageExt(imgUrl);
-                  const imgFileName = `${year}_第${weekNum}周_${title}_${generateId()}.${ext}`;
+                  const imgFileName = `${dateLabel}_${title}_${generateId()}.${ext}`;
 
                   if (imgUrl.startsWith('/')) {
-                      // 相对路径，从服务器下载
+                      // 鐩稿璺緞锛屼粠鏈嶅姟鍣ㄤ笅杞?
                       const response = await fetch(imgUrl);
                       if (response.ok) {
                           imgBlob = await response.blob();
@@ -1076,7 +1012,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                       }
                       imgBlob = new Blob([u8arr], { type: mime });
                   } else if (imgUrl.startsWith('http')) {
-                      // 外部 URL，尝试下载
+                      // 澶栭儴 URL锛屽皾璇曚笅杞?
                       try {
                           const response = await fetch(imgUrl);
                           if (response.ok) {
@@ -1096,7 +1032,7 @@ export default function Dashboard({ userConfig, onLogout }) {
               }
           }
 
-          // 在 Markdown 中添加图片引用
+          // 鍦?Markdown 涓坊鍔犲浘鐗囧紩鐢?
           if (savedImageNames.length > 0) {
               mdContent += `## 图片\n\n`;
               savedImageNames.forEach((imgName, idx) => {
@@ -1115,7 +1051,7 @@ export default function Dashboard({ userConfig, onLogout }) {
   };
 
 
-  // 修改点3：如果没有出生日期 (新用户)，显示全屏黑色背景引导页
+  // 淇敼鐐?锛氬鏋滄病鏈夊嚭鐢熸棩鏈?(鏂扮敤鎴?锛屾樉绀哄叏灞忛粦鑹茶儗鏅紩瀵奸〉
   if (!config || !config.dob || isNaN(new Date(config.dob).getTime())) {
     return (
       <div className="min-h-screen bg-neutral-950 flex flex-col items-center justify-center p-6 text-white relative overflow-hidden">
@@ -1152,7 +1088,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                              onChange={e => {
                                const month = parseInt(e.target.value);
                                setDobMonth(month);
-                               // 调整天数不超过新月份的最大天数
+                               // 璋冩暣澶╂暟涓嶈秴杩囨柊鏈堜唤鐨勬渶澶уぉ鏁?
                                const maxDays = new Date(dobYear, month, 0).getDate();
                                if (dobDay > maxDays) {
                                  setDobDay(maxDays);
@@ -1190,8 +1126,6 @@ export default function Dashboard({ userConfig, onLogout }) {
     );
   }
 
-  const gridWeeks = Array.from({ length: 52 });
-
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 font-sans">
       <nav className="border-b border-neutral-800 bg-neutral-950/80 backdrop-blur sticky top-0 z-40 p-2 sm:p-4">
@@ -1210,7 +1144,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                 </div>
                 {config.is_admin && (
                     <button onClick={()=>setIsAdminModalOpen(true)} className="text-xs bg-neutral-800 px-2 py-1 rounded flex items-center gap-1 hover:bg-neutral-700 hidden sm:flex">
-                        <UserPlus size={12}/> 管理员:添加用户
+                        <UserPlus size={12}/> 管理员 · 添加用户
                     </button>
                 )}
             </div>
@@ -1228,93 +1162,94 @@ export default function Dashboard({ userConfig, onLogout }) {
       </nav>
 
       <main className="max-w-7xl mx-auto p-2 sm:p-4 space-y-4 sm:space-y-8">
-        {/* 仪表盘统计 */}
+        {/* 浠〃鐩樼粺璁?*/}
         <section className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
            <Card className="p-3 sm:p-6"><div className="text-xs text-neutral-400">人生时钟</div><div className="text-xl sm:text-3xl font-bold">{stats?.time || '--:--'}</div></Card>
-           <Card className="p-3 sm:p-6"><div className="text-xs text-neutral-400">已活周数</div><div className="text-xl sm:text-3xl font-bold">{stats?.weeksLived || '--'}</div></Card>
+           <Card className="p-3 sm:p-6"><div className="text-xs text-neutral-400">已活天数</div><div className="text-xl sm:text-3xl font-bold">{stats?.daysLived || '--'}</div></Card>
            <Card className="p-3 sm:p-6"><div className="text-xs text-neutral-400">已活年数</div><div className="text-xl sm:text-3xl font-bold">{stats?.yearsLived || '--'}</div></Card>
            <Card className="p-3 sm:p-6"><div className="text-xs text-neutral-400">人生进度</div><div className="text-xl sm:text-3xl font-bold">{stats?.progress || '--'}%</div></Card>
         </section>
 
-        {/* 主网格区域 */}
+        {/* 涓荤綉鏍煎尯鍩?*/}
         <div className="lg:grid lg:grid-cols-12 gap-4 sm:gap-8 space-y-4 lg:space-y-0">
             <div className="lg:col-span-8 space-y-4 sm:space-y-6">
-                {/* 年份切换 */}
                 <div className="flex justify-between items-center bg-neutral-900 p-2 sm:p-4 rounded-xl border border-neutral-800">
-                    <button onClick={() => setViewYear(c => Math.max(0, c-1))} className="p-1 sm:p-2 hover:bg-neutral-800 rounded"><ChevronLeft size={20} /></button>
-                    <span className="font-bold text-sm sm:text-base">
-                        {config && config.dob && !isNaN(new Date(config.dob).getTime()) ? `${new Date(config.dob).getFullYear() + viewYear} 年` : '请设置生日'}
-                        <span className="text-neutral-500 text-xs sm:text-sm font-normal ml-1 sm:ml-2">( {viewYear} 岁 )</span>
-                    </span>
-                    <button onClick={() => setViewYear(c => Math.min((config?.lifeExpectancy || 100) - 1, c+1))} className="p-1 sm:p-2 hover:bg-neutral-800 rounded"><ChevronRight size={20} /></button>
+                    <span className="font-bold text-sm sm:text-base">日记热力图（{heatmapYear} 年）</span>
+                    <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => {
+                            const index = heatmapYears.indexOf(heatmapYear);
+                            if (index < heatmapYears.length - 1) setHeatmapYear(heatmapYears[index + 1]);
+                          }}
+                          disabled={heatmapYears.indexOf(heatmapYear) >= heatmapYears.length - 1}
+                          className="p-1 rounded border border-neutral-700 text-neutral-300 hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed"
+                          title="查看更早年份"
+                        >
+                          <ChevronLeft size={14} />
+                        </button>
+                        <button
+                          onClick={() => {
+                            const index = heatmapYears.indexOf(heatmapYear);
+                            if (index > 0) setHeatmapYear(heatmapYears[index - 1]);
+                          }}
+                          disabled={heatmapYears.indexOf(heatmapYear) <= 0}
+                          className="p-1 rounded border border-neutral-700 text-neutral-300 hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed"
+                          title="查看更新年份"
+                        >
+                          <ChevronRight size={14} />
+                        </button>
+                    </div>
                 </div>
 
-                {/* 52周网格 - 移动端可横向滚动 */}
+                {/* Heatmap */}
                 <div className="bg-neutral-900/50 p-2 sm:p-4 rounded-lg border border-neutral-800 overflow-x-auto">
-                    <div className="grid grid-cols-8 sm:grid-cols-8 gap-1 sm:gap-1.5 min-w-[280px]">
-                    {gridWeeks.map((_, idx) => {
-                        const weekId = `${viewYear}-${idx}`;
-                        const evt = events[weekId];
-
-                        // 解析出生日期，处理字符串或Date对象
-                        let isPast = false;
-                        let isCurrentWeek = false;
-                        if (config && config.dob) {
-                            let birthDate;
-                            if (typeof config.dob === 'string') {
-                                const dobParts = config.dob.split('-');
-                                birthDate = new Date(parseInt(dobParts[0]), parseInt(dobParts[1]) - 1, parseInt(dobParts[2]));
-                            } else {
-                                birthDate = new Date(config.dob);
-                            }
-
-                            // 计算显示的日历年份
-                            const displayYear = birthDate.getFullYear() + viewYear;
-                            // 计算周的开始日期（基于日历周，周一为一周开始）
-                            const cellStartDate = getDateFromWeekInfo(displayYear, idx);
-
-                            // 计算周的结束日期
-                            const cellEndDate = new Date(cellStartDate);
-                            cellEndDate.setDate(cellEndDate.getDate() + 6);
-
-                            // 今天的日期
-                            const today = new Date();
-                            const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-
-                            // 只要周的开始日期不晚于今天，就是可填写的周
-                            isPast = cellStartDate <= todayStart;
-
-                            // 判断是否为当前周：今天在周的开始和结束日期之间
-                            isCurrentWeek = cellStartDate <= todayStart && todayStart <= cellEndDate;
-
-                            // 额外检查：只有当周的起始年份是当前年份时才显示当前周标记
-                            if (cellStartDate.getFullYear() !== today.getFullYear()) {
-                                isCurrentWeek = false;
-                            }
-                        }
-
-                        return (
-                            <div
-                                key={idx}
-                                onClick={() => handleGridClick(viewYear, idx)}
-                                className={`w-4 h-4 sm:w-5 sm:h-5 rounded-sm border relative transition-all flex items-center justify-center overflow-hidden
-                                    ${isCurrentWeek
-                                        ? 'bg-yellow-500 border-yellow-400 ring-2 ring-yellow-400/50'
-                                        : moodConfig[evt?.mood]?.color || (isPast ? 'bg-neutral-600 border-neutral-700' : 'bg-neutral-800 border-neutral-700')}
-                                    ${isPast ? 'cursor-pointer hover:brightness-110' : 'cursor-not-allowed opacity-60'}
-                                `}
-                                title={isCurrentWeek ? `当前周 - 第 ${viewYear} 岁，第 ${idx + 1} 周` : (isPast ? `第 ${viewYear} 岁，第 ${idx + 1} 周` : '未来时间，无法记录')}
-                            >
-                                {(evt?.images?.[0] || evt?.image) && <div className="absolute inset-0 bg-cover bg-center opacity-50" style={{backgroundImage: `url(${evt.images?.[0] || evt.image})`}} />}
-                                <span className={`relative z-10 text-[6px] sm:text-[8px] font-bold ${isCurrentWeek ? 'opacity-100 text-black' : 'opacity-0 hover:opacity-100'}`}>{idx + 1}</span>
-                            </div>
-                        )
-                    })}
+                    <div className="flex gap-1 min-w-[760px]">
+                    {heatmapWeeks.map((week, weekIndex) => (
+                        <div key={weekIndex} className="flex flex-col gap-1">
+                            {week.days.map((day) => (
+                                <button
+                                    key={`${day.dateKey}-${day.inYear ? 'in' : 'out'}`}
+                                    onClick={() => day.inYear && handleGridClick(day.dateKey, day.isFuture)}
+                                    className={`w-3.5 h-3.5 sm:w-4 sm:h-4 rounded-sm border relative transition-all overflow-hidden
+                                        ${day.isToday && day.inYear ? 'ring-1 ring-yellow-400' : ''}
+                                        ${!day.inYear ? 'bg-transparent border-transparent cursor-default' : ''}
+                                        ${day.event
+                                          ? moodConfig[day.event.mood]?.color || 'bg-emerald-500 border-emerald-600'
+                                          : (day.isFuture ? 'bg-neutral-900 border-neutral-800' : 'bg-neutral-700 border-neutral-700')}
+                                        ${day.inYear ? (day.isFuture ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:brightness-110') : ''}
+                                    `}
+                                    title={day.inYear ? (day.isFuture ? `${day.dateKey}（未来）` : day.dateKey) : ""}
+                                >
+                                    {(day.event?.images?.[0] || day.event?.image) && (
+                                        <div className="absolute inset-0 bg-cover bg-center opacity-45" style={{backgroundImage: `url(${day.event.images?.[0] || day.event.image})`}} />
+                                    )}
+                                </button>
+                            ))}
+                        </div>
+                    ))}
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-neutral-400">
+                        <div className="flex items-center gap-1">
+                            <span className="w-3 h-3 rounded-sm bg-neutral-700 border border-neutral-700 inline-block"></span>
+                            <span>未记录</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                            <span className="w-3 h-3 rounded-sm bg-green-500 border border-green-600 inline-block"></span>
+                            <span>开心</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                            <span className="w-3 h-3 rounded-sm bg-yellow-500 border border-yellow-600 inline-block"></span>
+                            <span>一般</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                            <span className="w-3 h-3 rounded-sm bg-red-500 border border-red-600 inline-block"></span>
+                            <span>艰难</span>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            {/* 侧边栏 */}
+            {/* 渚ц竟鏍?*/}
             <div className="lg:col-span-4 space-y-6">
                  {/* 目标清单 */}
                  <Card>
@@ -1329,7 +1264,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                                 <button onClick={() => handleGoalToggle(g.id)}>{g.completed ? <CheckCircle2 size={16} className="text-yellow-500"/> : <Circle size={16}/>}</button>
                                 <span className={g.completed ? "line-through text-neutral-500" : ""}>{g.text}</span>
                                 {g.completedAt && g.weekYear !== undefined && (
-                                    <span className="text-xs text-neutral-500 ml-1">(第 {g.weekYear} 岁)</span>
+                                    <span className="text-xs text-neutral-500 ml-1">(第{g.weekYear} 岁)</span>
                                 )}
                                 <button onClick={() => handleDeleteGoal(g.id)} className="ml-auto text-neutral-600 hover:text-red-500"><Trash2 size={14}/></button>
                             </div>
@@ -1364,7 +1299,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                                 const firstDay = new Date(year, month, 1);
                                 const lastDay = new Date(year, month + 1, 0);
                                 const daysInMonth = lastDay.getDate();
-                                const startingDay = (firstDay.getDay() + 6) % 7; // 周一为0，周日为6
+                                const startingDay = (firstDay.getDay() + 6) % 7; // 鍛ㄤ竴涓?锛屽懆鏃ヤ负6
 
                                 // 获取当月的纪念日/计划日（只有纪念日支持周年重复）
                                 const monthSpecialDays = specialDays.filter(day => {
@@ -1372,11 +1307,11 @@ export default function Dashboard({ userConfig, onLogout }) {
                                         `${day.date.getFullYear()}-${String(day.date.getMonth() + 1).padStart(2, '0')}-${String(day.date.getDate()).padStart(2, '0')}`;
                                     const [eventYear, eventMonth] = eventDate.split('-').map(Number);
 
-                                    // 只有纪念日类型才周年重复，计划日不重复
+                                    // 鍙湁绾康鏃ョ被鍨嬫墠鍛ㄥ勾閲嶅锛岃鍒掓棩涓嶉噸澶?
                                     if (day.type === 'anniversary') {
                                         return eventMonth === month + 1;
                                     }
-                                    // 计划日比较完整年月
+                                    // 璁″垝鏃ユ瘮杈冨畬鏁村勾鏈?
                                     return eventYear === year && eventMonth === month + 1;
                                 });
 
@@ -1393,7 +1328,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                                     // 使用本地时间格式化，避免时区偏移问题
                                     const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 
-                                    // 检查这一天是否有纪念日/计划日（只有纪念日支持周年重复）
+                                    // 妫€鏌ヨ繖涓€澶╂槸鍚︽湁绾康鏃?璁″垝鏃ワ紙鍙湁绾康鏃ユ敮鎸佸懆骞撮噸澶嶏級
                                     const dayEvents = monthSpecialDays.filter(event => {
                                         const eventDate = typeof event.date === 'string' ? event.date.split('T')[0] :
                                             `${event.date.getFullYear()}-${String(event.date.getMonth() + 1).padStart(2, '0')}-${String(event.date.getDate()).padStart(2, '0')}`;
@@ -1403,7 +1338,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                                         if (event.type === 'anniversary') {
                                             return eventMonth === month + 1 && eventDay === d;
                                         }
-                                        // 计划日比较完整日期
+                                        // 璁″垝鏃ユ瘮杈冨畬鏁存棩鏈?
                                         return eventDate === dateStr;
                                     });
 
@@ -1442,7 +1377,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                                                                 className={`w-1 h-1 rounded-full ${
                                                                     event.type === 'anniversary' ? 'bg-blue-500' : 'bg-purple-500'
                                                                 }`}
-                                                                title={`${event.title} (${event.type === 'anniversary' ? '纪念日' : '计划日'})`}
+                                                                title={`${event.title} (${event.type === 'anniversary' ? '纪念日' : '计划'})`}
                                                             />
                                                         ))}
                                                     </div>
@@ -1474,21 +1409,20 @@ export default function Dashboard({ userConfig, onLogout }) {
             </div>
         </div>
 
-        {/* 弹窗：编辑回忆 */}
-        <Modal isOpen={isEditModalOpen} onClose={()=>setIsEditModalOpen(false)} title="记录回忆">
+        {/* 寮圭獥锛氱紪杈戝洖蹇?*/}
+        <Modal isOpen={isEditModalOpen} onClose={()=>setIsEditModalOpen(false)} title={selectedDate ? `记录日记 · ${selectedDate.dateKey}` : "记录日记"}>
             <div className="space-y-4">
-                {/* 本周完成的目标 */}
-                {selectedWeek && (() => {
-                    const completedGoalsThisWeek = goals.filter(g =>
+                {/* 褰撴棩瀹屾垚鐨勭洰鏍?*/}
+                {selectedDate && (() => {
+                    const completedGoalsThisDay = goals.filter(g =>
                         g.completed &&
-                        g.weekYear === selectedWeek.yearIdx &&
-                        g.weekIndex === selectedWeek.weekIdx
+                        g.completedAt === selectedDate.dateKey
                     );
-                    return completedGoalsThisWeek.length > 0 && (
+                    return completedGoalsThisDay.length > 0 && (
                         <div className="bg-neutral-800/50 border border-neutral-700 rounded-lg p-3">
-                            <div className="text-sm font-medium text-neutral-400 mb-2">本周完成的目标</div>
+                            <div className="text-sm font-medium text-neutral-400 mb-2">当日完成的目标</div>
                             <div className="space-y-1">
-                                {completedGoalsThisWeek.map(g => (
+                                {completedGoalsThisDay.map(g => (
                                     <div key={g.id} className="flex items-center text-sm">
                                         <CheckCircle2 size={14} className="text-yellow-500 mr-2 flex-shrink-0" />
                                         <span className="line-through text-neutral-300">{g.text}</span>
@@ -1534,7 +1468,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                             <input type="file" ref={fileInputRef} accept="image/*" className="hidden" onChange={handleImageSelect} multiple />
                             <button onClick={()=>fileInputRef.current?.click()} className="flex-1 border border-dashed border-neutral-600 p-2 rounded text-neutral-400 hover:bg-neutral-800 transition-colors flex justify-center gap-2 text-sm"><Upload size={14}/> 添加更多图片</button>
                             <button onClick={() => {
-                                // 清空所有图片
+                                // 娓呯┖鎵€鏈夊浘鐗?
                                 tempEvent.images.forEach(url => URL.revokeObjectURL(url));
                                 setTempEvent({
                                     ...tempEvent,
@@ -1561,7 +1495,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                     <span>粘贴图片</span>
                 </div>
 
-                {/* 标题输入 + 表情选择器 */}
+                {/* 鏍囬杈撳叆 + 琛ㄦ儏閫夋嫨鍣?*/}
                 <div className="space-y-2">
                     <div className="relative">
                         <input
@@ -1606,7 +1540,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                     ))}
                 </div>
 
-                {/* 详情输入 + 表情选择器 */}
+                {/* 璇︽儏杈撳叆 + 琛ㄦ儏閫夋嫨鍣?*/}
                 <div className="space-y-2">
                     <div className="relative">
                         <textarea
@@ -1651,7 +1585,7 @@ export default function Dashboard({ userConfig, onLogout }) {
             </div>
         </Modal>
         
-        {/* 弹窗：相册 - 支持全屏 */}
+        {/* 寮圭獥锛氱浉鍐?- 鏀寔鍏ㄥ睆 */}
         {isGalleryOpen && (
             <div className={`fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm ${isGalleryFullScreen ? '' : 'p-4'}`}>
                 <div className={`bg-neutral-900 border border-neutral-700 shadow-2xl animate-in fade-in zoom-in-95 duration-200 flex flex-col ${
@@ -1694,7 +1628,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                                     >
                                         <img src={img.image} className="w-full h-auto" loading="lazy" alt={img.eventTitle || '相册图片'} />
                                         <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-2 text-sm">
-                                            <div className="font-bold">第 {img.yearIdx} 岁 · 第 {img.weekIdx + 1} 周</div>
+                                            <div className="font-bold">{img.dateKey}</div>
                                             {img.eventTitle && <div className="text-xs mt-1 truncate" title={img.eventTitle}>{img.eventTitle}</div>}
                                         </div>
                                     </div>
@@ -1706,7 +1640,7 @@ export default function Dashboard({ userConfig, onLogout }) {
             </div>
         )}
 
-        {/* 弹窗：管理员添加用户 */}
+        {/* 窗口：管理员添加用户 */}
         <Modal isOpen={isAdminModalOpen} onClose={()=>setIsAdminModalOpen(false)} title="添加新用户">
              <form onSubmit={handleRegister} className="space-y-4">
                  <input placeholder="用户名" required value={newUserForm.username} onChange={e=>setNewUserForm({...newUserForm, username:e.target.value})} className="w-full bg-black border border-neutral-700 p-2 rounded text-white"/>
@@ -1715,7 +1649,7 @@ export default function Dashboard({ userConfig, onLogout }) {
              </form>
         </Modal>
 
-        {/* 弹窗：用户资料编辑 */}
+        {/* 寮圭獥锛氱敤鎴疯祫鏂欑紪杈?*/}
         <Modal isOpen={isUserProfileModalOpen} onClose={()=>setIsUserProfileModalOpen(false)} title="编辑个人资料">
              <form onSubmit={handleSaveProfile} className="space-y-4">
                  {/* 头像上传区域 */}
@@ -1741,7 +1675,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                          className="px-4 py-2 bg-neutral-700 hover:bg-neutral-600 rounded text-sm flex items-center gap-2 disabled:opacity-50"
                      >
                          <Upload size={14} />
-                         {isUploadingAvatar ? '上传中...' : '上传头像'}
+                         {isUploadingAvatar ? "上传中..." : "上传头像"}
                      </button>
                      <p className="text-xs text-neutral-500">支持 JPG、PNG、GIF、WebP 格式，最大 5MB</p>
                  </div>
@@ -1820,7 +1754,7 @@ export default function Dashboard({ userConfig, onLogout }) {
              </form>
         </Modal>
 
-        {/* 弹窗：修改密码 */}
+        {/* 寮圭獥锛氫慨鏀瑰瘑鐮?*/}
         <Modal isOpen={isChangePasswordModalOpen} onClose={()=>{
           setIsChangePasswordModalOpen(false);
           setPasswordError('');
@@ -1878,12 +1812,12 @@ export default function Dashboard({ userConfig, onLogout }) {
               disabled={isChangingPassword}
               className="w-full bg-white text-black p-2 rounded font-bold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-neutral-200 transition-colors"
             >
-              {isChangingPassword ? '修改中...' : '确认修改'}
+              {isChangingPassword ? "修改中..." : "确认修改"}
             </button>
           </form>
         </Modal>
 
-        {/* 弹窗：导出 */}
+        {/* 寮圭獥锛氬鍑?*/}
         <Modal isOpen={isExportModalOpen} onClose={()=>setIsExportModalOpen(false)} title="导出数据">
             <div className="space-y-4">
                 <div className="text-sm text-neutral-400 bg-neutral-800 p-3 rounded">
@@ -1900,7 +1834,7 @@ export default function Dashboard({ userConfig, onLogout }) {
             </div>
         </Modal>
 
-        {/* 纪念日/计划日管理 */}
+        {/* 绾康鏃?璁″垝鏃ョ鐞?*/}
         <Modal isOpen={isSpecialDaysModalOpen} onClose={()=>setIsSpecialDaysModalOpen(false)} title="纪念日与计划日" maxWidth="max-w-2xl">
             <div className="space-y-6">
                 {/* 添加新纪念日 */}
@@ -1910,10 +1844,10 @@ export default function Dashboard({ userConfig, onLogout }) {
                         <input
                             value={tempSpecialDay.title}
                             onChange={e=>setTempSpecialDay({...tempSpecialDay, title:e.target.value})}
-                            placeholder="事件名称（如：恋爱纪念日）"
+                            placeholder="例：生日、结婚纪念日等"
                             className="w-full bg-black border border-neutral-700 p-2 rounded text-white text-sm"
                         />
-                        {/* 年月日选择器 */}
+                        {/* 日期选择（年、月、日\ef */}
                         <div className="grid grid-cols-3 gap-2">
                             <div>
                                 <label className="block text-xs text-neutral-400 mb-1">年</label>
@@ -1973,7 +1907,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                                     return;
                                 }
                                 try {
-                                    // 构建日期字符串 YYYY-MM-DD
+                                    // 鏋勫缓鏃ユ湡瀛楃涓?YYYY-MM-DD
                                     const dateStr = `${tempSpecialDay.year}-${String(tempSpecialDay.month).padStart(2,'0')}-${String(tempSpecialDay.day).padStart(2,'0')}`;
                                     const newSpecialDay = await createSpecialDay({
                                         title: tempSpecialDay.title,
@@ -2019,7 +1953,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                                                 const originalDate = new Date(day.date);
                                                 const today = new Date();
                                                 let years = today.getFullYear() - originalDate.getFullYear();
-                                                // 如果今年的纪念日还没到，年数减1
+                                                // 濡傛灉浠婂勾鐨勭邯蹇垫棩杩樻病鍒帮紝骞存暟鍑?
                                                 const thisYearAnniversary = new Date(today.getFullYear(), originalDate.getMonth(), originalDate.getDate());
                                                 if (today < thisYearAnniversary) {
                                                     years -= 1;
@@ -2030,7 +1964,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                                                 return null;
                                             })()}
                                             <span className={`ml-2 px-2 py-0.5 rounded text-xs ${day.type==='anniversary'?'bg-blue-500/20 text-blue-300':'bg-purple-500/20 text-purple-300'}`}>
-                                                {day.type==='anniversary'?'纪念日':'计划日'}
+                                                {day.type==='anniversary'?'纪念日':'计划'}
                                             </span>
                                         </div>
                                     </div>
@@ -2105,7 +2039,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                             const firstDay = new Date(year, month, 1);
                             const lastDay = new Date(year, month + 1, 0);
                             const daysInMonth = lastDay.getDate();
-                            const startingDay = (firstDay.getDay() + 6) % 7; // 周一为0，周日为6
+                            const startingDay = (firstDay.getDay() + 6) % 7; // 鍛ㄤ竴涓?锛屽懆鏃ヤ负6
 
                             // 获取当月的纪念日/计划日（只有纪念日支持周年重复）
                             const monthSpecialDays = specialDays.filter(day => {
@@ -2113,11 +2047,11 @@ export default function Dashboard({ userConfig, onLogout }) {
                                     `${day.date.getFullYear()}-${String(day.date.getMonth() + 1).padStart(2, '0')}-${String(day.date.getDate()).padStart(2, '0')}`;
                                 const [eventYear, eventMonth] = eventDate.split('-').map(Number);
 
-                                // 只有纪念日类型才周年重复，计划日不重复
+                                // 鍙湁绾康鏃ョ被鍨嬫墠鍛ㄥ勾閲嶅锛岃鍒掓棩涓嶉噸澶?
                                 if (day.type === 'anniversary') {
                                     return eventMonth === month + 1;
                                 }
-                                // 计划日比较完整年月
+                                // 璁″垝鏃ユ瘮杈冨畬鏁村勾鏈?
                                 return eventYear === year && eventMonth === month + 1;
                             });
 
@@ -2134,7 +2068,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                                 // 使用本地时间格式化，避免时区偏移问题
                                 const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 
-                                // 检查这一天是否有纪念日/计划日（只有纪念日支持周年重复）
+                                // 妫€鏌ヨ繖涓€澶╂槸鍚︽湁绾康鏃?璁″垝鏃ワ紙鍙湁绾康鏃ユ敮鎸佸懆骞撮噸澶嶏級
                                 const dayEvents = monthSpecialDays.filter(event => {
                                     const eventDate = typeof event.date === 'string' ? event.date.split('T')[0] :
                                         `${event.date.getFullYear()}-${String(event.date.getMonth() + 1).padStart(2, '0')}-${String(event.date.getDate()).padStart(2, '0')}`;
@@ -2144,7 +2078,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                                     if (event.type === 'anniversary') {
                                         return eventMonth === month + 1 && eventDay === d;
                                     }
-                                    // 计划日比较完整日期
+                                    // 璁″垝鏃ユ瘮杈冨畬鏁存棩鏈?
                                     return eventDate === dateStr;
                                 });
 
@@ -2176,7 +2110,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                                                     <div
                                                         key={event.id}
                                                         className={`text-xs p-1 rounded truncate ${event.type === 'anniversary' ? 'bg-blue-500/30 text-blue-300' : 'bg-purple-500/30 text-purple-300'}`}
-                                                        title={`${event.title} (${event.type === 'anniversary' ? '纪念日' : '计划日'})`}
+                                                        title={`${event.title} (${event.type === 'anniversary' ? '纪念日' : '计划'})`}
                                                     >
                                                         {event.title}
                                                     </div>
@@ -2208,7 +2142,7 @@ export default function Dashboard({ userConfig, onLogout }) {
             </div>
         </Modal>
 
-        {/* 大图预览 */}
+        {/* Image Preview Modal */}
         {isImagePreviewOpen && (
             <div className={`fixed inset-0 z-[60] bg-black/90 flex items-center justify-center ${isPreviewFullScreen ? '' : 'p-4'}`} onClick={()=>setIsImagePreviewOpen(false)}>
                 <div className="absolute top-4 right-4 flex gap-2">

@@ -131,14 +131,14 @@ async def get_events(
     """
     获取当前用户的所有事件
 
-    按年-周索引组织事件数据，便于前端显示
+    按日期键组织事件数据，便于前端显示
 
     Args:
         db: 数据库会话
         current_user: 当前用户
 
     Returns:
-        Dict[str, Dict[str, Any]]: 以"年-周"为键的事件字典
+        Dict[str, Dict[str, Any]]: 以"YYYY-MM-DD"为键的事件字典
             每个事件包含id、标题、内容、心情、缩略图路径和原图路径
     """
     # 查询当前用户的所有事件
@@ -147,7 +147,7 @@ async def get_events(
     # 转换为前端需要的格式
     result = {}
     for event in events:
-        key = f"{event.year_idx}-{event.week_idx}"
+        key = event.entry_date.isoformat()
         # 解析图片路径（支持多张图片，JSON数组或单个字符串）
         import json
 
@@ -174,6 +174,7 @@ async def get_events(
         # 返回第一张缩略图作为主图（向后兼容），同时返回所有图片
         result[key] = {
             "id": event.id,
+            "entry_date": event.entry_date.isoformat(),
             "title": event.title,
             "content": event.content,
             "mood": event.mood,
@@ -188,8 +189,7 @@ async def get_events(
 
 @router.post("/events")
 async def save_event(
-    year_idx: int = Form(..., description="年索引"),
-    week_idx: int = Form(..., description="周索引（1-52）"),
+    entry_date: str = Form(..., description="记录日期（YYYY-MM-DD）"),
     title: str = Form(None, description="事件标题"),
     content: str = Form(None, description="事件内容"),
     mood: str = Form("neutral", description="心情状态"),
@@ -202,11 +202,10 @@ async def save_event(
     """
     保存或更新事件
 
-    根据年-周索引创建或更新事件记录，支持图片上传
+    根据日期创建或更新事件记录，支持图片上传
 
     Args:
-        year_idx: 年索引
-        week_idx: 周索引
+        entry_date: 记录日期
         title: 事件标题（可选）
         content: 事件内容（可选）
         mood: 心情状态（默认"neutral"）
@@ -217,19 +216,26 @@ async def save_event(
     Returns:
         Dict[str, str]: 操作结果消息
     """
+    # 解析日期
+    try:
+        parsed_entry_date = datetime.strptime(entry_date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="日期格式无效，请使用YYYY-MM-DD"
+        )
+
     # 查找现有事件
     event = db.query(Event).filter(
         Event.user_id == current_user.id,
-        Event.year_idx == year_idx,
-        Event.week_idx == week_idx,
+        Event.entry_date == parsed_entry_date,
     ).first()
 
     # 如果不存在则创建新事件
     if not event:
         event = Event(
             user_id=current_user.id,
-            year_idx=year_idx,
-            week_idx=week_idx,
+            entry_date=parsed_entry_date,
         )
         db.add(event)
 

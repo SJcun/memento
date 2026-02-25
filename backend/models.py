@@ -4,7 +4,7 @@
 """
 
 from datetime import date
-from sqlalchemy import Column, Integer, String, Text, Boolean, Date, ForeignKey
+from sqlalchemy import Column, Integer, String, Text, Boolean, Date, ForeignKey, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 
 # 创建声明性基类
@@ -50,6 +50,9 @@ class Event(Base):
     """
 
     __tablename__ = "events"
+    __table_args__ = (
+        UniqueConstraint("user_id", "entry_date", name="uq_events_user_entry_date"),
+    )
 
     # 主键和索引
     id = Column(Integer, primary_key=True, index=True)
@@ -57,9 +60,8 @@ class Event(Base):
     # 外键关联
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
 
-    # 时间索引（年-周）
-    year_idx = Column(Integer, nullable=False, comment="年索引")
-    week_idx = Column(Integer, nullable=False, comment="周索引（1-52）")
+    # 时间索引（日记）
+    entry_date = Column(Date, nullable=False, index=True, comment="记录日期")
 
     # 事件内容
     title = Column(String, nullable=True, comment="事件标题")
@@ -77,12 +79,12 @@ class Event(Base):
     # user = relationship("User", back_populates="events")
 
     def __repr__(self):
-        return f"<Event(id={self.id}, user_id={self.user_id}, year={self.year_idx}, week={self.week_idx})>"
+        return f"<Event(id={self.id}, user_id={self.user_id}, date={self.entry_date})>"
 
     @property
-    def year_week_key(self):
-        """获取年-周组合键（用于前端索引）"""
-        return f"{self.year_idx}-{self.week_idx}"
+    def date_key(self):
+        """获取日期键（用于前端索引）"""
+        return self.entry_date.isoformat()
 
 
 class Goal(Base):

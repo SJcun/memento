@@ -40,10 +40,9 @@ export const fetchEvents = async () => {
   return res.data;
 };
 
-export const saveEventToBackend = async (yearIdx, weekIdx, data) => {
+export const saveEventToBackend = async (entryDate, data) => {
   const formData = new FormData();
-  formData.append('year_idx', yearIdx);
-  formData.append('week_idx', weekIdx);
+  formData.append('entry_date', entryDate);
   if (data.title) formData.append('title', data.title);
   if (data.content) formData.append('content', data.content);
   if (data.mood) formData.append('mood', data.mood);

@@ -1214,6 +1214,13 @@ export default function Dashboard({ userConfig, onLogout }) {
 
       const JSZip = window.JSZip;
       const saveAs = window.saveAs;
+      const jsPDF = window.jspdf?.jsPDF;
+
+      if (!JSZip || !saveAs || !jsPDF) {
+          alert("导出组件加载失败，请刷新页面后重试");
+          setIsExporting(false);
+          return;
+      }
 
       const zip = new JSZip();
       const imgFolder = zip.folder("images");
@@ -1241,6 +1248,219 @@ export default function Dashboard({ userConfig, onLogout }) {
       const getImageExt = (url) => {
           const match = url.match(/\.([a-zA-Z0-9]+)(?:\?|$)/);
           return match ? match[1].toLowerCase() : 'jpg';
+      };
+
+      const moodLabelMap = {
+          joy: '开心',
+          neutral: '一般',
+          hard: '艰难',
+      };
+
+      const wrapCanvasText = (ctx, text, maxWidth) => {
+          const source = `${text ?? ''}`;
+          if (!source) return [''];
+
+          const wrapped = [];
+          let current = '';
+          for (const ch of source) {
+              const trial = current + ch;
+              if (!current || ctx.measureText(trial).width <= maxWidth) {
+                  current = trial;
+              } else {
+                  wrapped.push(current);
+                  current = ch;
+              }
+          }
+          if (current) wrapped.push(current);
+          return wrapped;
+      };
+
+      const loadImageFromBlob = (blob) => {
+          return new Promise((resolve, reject) => {
+              const objectUrl = URL.createObjectURL(blob);
+              const image = new Image();
+              image.onload = () => {
+                  URL.revokeObjectURL(objectUrl);
+                  resolve(image);
+              };
+              image.onerror = (err) => {
+                  URL.revokeObjectURL(objectUrl);
+                  reject(err);
+              };
+              image.src = objectUrl;
+          });
+      };
+
+      const createPdfFromEvent = async (evt, dateLabel, savedImages) => {
+          if (typeof document === 'undefined') return null;
+
+          const pageWidthPx = 1240;
+          const pageHeightPx = 1754;
+          const marginX = 88;
+          const marginTop = 96;
+          const marginBottom = 90;
+          const contentWidth = pageWidthPx - marginX * 2;
+          const pages = [];
+          let pageCanvas = null;
+          let ctx = null;
+          let y = marginTop;
+
+          const createNewPage = () => {
+              pageCanvas = document.createElement('canvas');
+              pageCanvas.width = pageWidthPx;
+              pageCanvas.height = pageHeightPx;
+              ctx = pageCanvas.getContext('2d');
+              if (!ctx) return false;
+              ctx.fillStyle = '#ffffff';
+              ctx.fillRect(0, 0, pageWidthPx, pageHeightPx);
+              y = marginTop;
+              pages.push(pageCanvas);
+              return true;
+          };
+
+          if (!createNewPage()) return null;
+
+          const ensureSpace = (requiredHeight) => {
+              if (y + requiredHeight <= pageHeightPx - marginBottom) return true;
+              return createNewPage();
+          };
+
+          const drawParagraph = (text, options = {}) => {
+              const {
+                  font = '32px "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif',
+                  color = '#111111',
+                  lineHeight = 46,
+                  before = 0,
+                  after = 0,
+              } = options;
+
+              y += before;
+              if (!ensureSpace(lineHeight)) return;
+
+              ctx.font = font;
+              ctx.fillStyle = color;
+              const blocks = `${text ?? ''}`.split(/\r?\n/);
+
+              blocks.forEach((block, blockIndex) => {
+                  const normalized = block || ' ';
+                  const lines = wrapCanvasText(ctx, normalized, contentWidth);
+                  lines.forEach((line) => {
+                      if (!ensureSpace(lineHeight)) return;
+                      ctx.fillText(line, marginX, y);
+                      y += lineHeight;
+                  });
+                  if (blockIndex < blocks.length - 1) {
+                      const gap = Math.round(lineHeight * 0.6);
+                      if (!ensureSpace(gap)) return;
+                      y += gap;
+                  }
+              });
+
+              y += after;
+          };
+
+          const moodLabel = moodLabelMap[evt.mood] || '未记录';
+
+          drawParagraph(evt.title || '无标题', {
+              font: 'bold 52px "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif',
+              color: '#000000',
+              lineHeight: 62,
+              after: 20,
+          });
+          drawParagraph(`日期：${dateLabel}`, {
+              font: '28px "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif',
+              color: '#374151',
+              lineHeight: 40,
+          });
+          drawParagraph(`心情：${moodLabel}`, {
+              font: '28px "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif',
+              color: '#374151',
+              lineHeight: 40,
+              after: 24,
+          });
+          drawParagraph('内容', {
+              font: 'bold 34px "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif',
+              color: '#111111',
+              lineHeight: 48,
+              after: 8,
+          });
+          drawParagraph(evt.content || '（无内容）', {
+              font: '30px "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif',
+              color: '#111111',
+              lineHeight: 44,
+              after: 20,
+          });
+
+          if (savedImages.length > 0) {
+              drawParagraph('图片预览', {
+                  font: 'bold 32px "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif',
+                  color: '#111111',
+                  lineHeight: 44,
+                  after: 6,
+              });
+              for (let idx = 0; idx < savedImages.length; idx++) {
+                  const savedImage = savedImages[idx];
+                  if (!savedImage?.blob) continue;
+
+                  try {
+                      const imageElement = await loadImageFromBlob(savedImage.blob);
+                      const captionHeight = 34;
+                      const imageTopGap = 8;
+                      const imageBottomGap = 20;
+                      const maxImageHeight = 520;
+
+                      const ratio = Math.min(
+                          contentWidth / imageElement.width,
+                          maxImageHeight / imageElement.height,
+                          1
+                      );
+
+                      const drawWidth = Math.max(1, Math.round(imageElement.width * ratio));
+                      const drawHeight = Math.max(1, Math.round(imageElement.height * ratio));
+                      const neededHeight = captionHeight + imageTopGap + drawHeight + imageBottomGap;
+
+                      if (!ensureSpace(neededHeight)) continue;
+
+                      ctx.font = '24px "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif';
+                      ctx.fillStyle = '#374151';
+                      ctx.fillText(`图片 ${idx + 1}: images/${savedImage.name}`, marginX, y);
+                      y += captionHeight;
+
+                      const imageX = marginX + (contentWidth - drawWidth) / 2;
+                      const imageY = y + imageTopGap;
+
+                      ctx.strokeStyle = '#d1d5db';
+                      ctx.lineWidth = 1;
+                      ctx.strokeRect(imageX - 1, imageY - 1, drawWidth + 2, drawHeight + 2);
+                      ctx.drawImage(imageElement, imageX, imageY, drawWidth, drawHeight);
+
+                      y = imageY + drawHeight + imageBottomGap;
+                  } catch (err) {
+                      drawParagraph(`图片 ${idx + 1} 预览加载失败：images/${savedImage.name}`, {
+                          font: '24px "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif',
+                          color: '#6b7280',
+                          lineHeight: 34,
+                          after: 2,
+                      });
+                  }
+              }
+          }
+
+          const pdf = new jsPDF({
+              orientation: 'p',
+              unit: 'pt',
+              format: 'a4',
+          });
+          const pdfWidth = pdf.internal.pageSize.getWidth();
+          const pdfHeight = pdf.internal.pageSize.getHeight();
+
+          pages.forEach((canvas, pageIndex) => {
+              if (pageIndex > 0) pdf.addPage();
+              const pageImage = canvas.toDataURL('image/jpeg', 0.9);
+              pdf.addImage(pageImage, 'JPEG', 0, 0, pdfWidth, pdfHeight, undefined, 'FAST');
+          });
+
+          return pdf.output('arraybuffer');
       };
 
       // 处理每一天的记录
@@ -1276,6 +1496,7 @@ export default function Dashboard({ userConfig, onLogout }) {
 
           // 涓嬭浇骞朵繚瀛樺浘鐗?
           const savedImageNames = [];
+          const savedImageFiles = [];
           for (let imgIdx = 0; imgIdx < allImages.length; imgIdx++) {
               const imgUrl = allImages[imgIdx];
               if (!imgUrl) continue;
@@ -1317,6 +1538,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                   if (imgBlob) {
                       imgFolder.file(imgFileName, imgBlob);
                       savedImageNames.push(imgFileName);
+                      savedImageFiles.push({ name: imgFileName, blob: imgBlob });
                   }
               } catch (e) {
                   console.error('图片处理失败:', imgUrl, e);
@@ -1333,6 +1555,15 @@ export default function Dashboard({ userConfig, onLogout }) {
 
           // 保存 Markdown 文件
           zip.file(`${baseFileName}.md`, mdContent);
+
+          try {
+              const pdfBuffer = await createPdfFromEvent(evt, dateLabel, savedImageFiles);
+              if (pdfBuffer) {
+                  zip.file(`${baseFileName}.pdf`, pdfBuffer);
+              }
+          } catch (e) {
+              console.error('PDF 导出失败:', evt.dateKey, e);
+          }
       }
 
       const content = await zip.generateAsync({type:"blob"});

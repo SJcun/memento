@@ -71,6 +71,7 @@ class Event(Base):
     # 图片存储路径（JSON数组字符串，存储多个图片路径）
     image_original = Column(Text, nullable=True, comment="原始图片路径数组（JSON格式）")
     image_thumbnail = Column(Text, nullable=True, comment="缩略图路径数组（JSON格式）")
+    city = Column(String, nullable=True, comment="拍摄城市（自动识别，测试版）")
 
     # 时间戳
     updated_at = Column(Date, default=date.today, comment="最后更新时间")

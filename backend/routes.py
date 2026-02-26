@@ -20,7 +20,7 @@ from auth import (
     get_current_admin_user,
     create_initial_admin,
 )
-from utils import process_image, validate_image_size
+from utils import process_image, validate_image_size, extract_city_from_image
 
 # 创建API路由组
 router = APIRouter(tags=["api"])
@@ -178,6 +178,7 @@ async def get_events(
             "title": event.title,
             "content": event.content,
             "mood": event.mood,
+            "city": event.city,
             "image": thumbnail_paths[0] if thumbnail_paths else None,  # 第一张缩略图（向后兼容）
             "imageOriginal": original_paths[0] if original_paths else None,  # 第一张原图（向后兼容）
             "images": thumbnail_paths,  # 所有缩略图
@@ -198,7 +199,7 @@ async def save_event(
     keep_images: str = Form(None, description="要保留的现有图片URL列表（JSON字符串）"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     """
     保存或更新事件
 
@@ -256,11 +257,17 @@ async def save_event(
 
     original_paths = []
     thumbnail_paths = []
+    detected_city = None
+    has_new_images = len(all_images) > 0
 
     # 处理新上传的图片
     for img in all_images:
         # 验证图片大小
         validate_image_size(img)
+
+        # 测试版：尝试从 EXIF GPS 解析城市（取第一张可解析的）
+        if detected_city is None:
+            detected_city = extract_city_from_image(img)
 
         # 处理图片（保存原图+生成缩略图）
         paths = process_image(img)
@@ -300,14 +307,22 @@ async def save_event(
         # 有图片（新上传的或保留的）
         event.image_original = json.dumps(original_paths)
         event.image_thumbnail = json.dumps(thumbnail_paths)
+
+        # 城市字段更新策略（测试版）
+        if detected_city:
+            event.city = detected_city
+        elif has_new_images and not keep_images_list:
+            # 仅有新图且未识别到城市时，清空旧城市，避免误导
+            event.city = None
     else:
         # 没有图片，清空字段
         event.image_original = None
         event.image_thumbnail = None
+        event.city = None
 
     db.commit()
 
-    return {"msg": "事件保存成功"}
+    return {"msg": "事件保存成功", "city": event.city}
 
 
 @router.get("/health")

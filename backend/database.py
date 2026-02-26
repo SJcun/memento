@@ -3,7 +3,7 @@
 提供数据库引擎、会话工厂和依赖注入功能
 """
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -83,6 +83,23 @@ def create_tables():
     如果表不存在则自动创建（根据模型定义）
     """
     Base.metadata.create_all(bind=engine)
+    ensure_schema_compatibility()
+
+
+def ensure_schema_compatibility():
+    """
+    轻量级兼容迁移（测试版）
+    为已有数据库补齐新字段，避免旧库启动失败。
+    """
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+    if "events" not in table_names:
+        return
+
+    event_columns = {col["name"] for col in inspector.get_columns("events")}
+    if "city" not in event_columns:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE events ADD COLUMN city VARCHAR"))
 
 
 def drop_tables():

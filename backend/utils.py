@@ -6,7 +6,10 @@
 import os
 import shutil
 import uuid
-from typing import Dict
+import json
+from typing import Dict, Optional, Tuple
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from fastapi import UploadFile, HTTPException, status
 from PIL import Image, ImageOps
@@ -171,3 +174,141 @@ def safe_delete_file(file_path: str):
     except Exception:
         # 忽略删除错误
         pass
+
+
+def _to_float(value) -> Optional[float]:
+    """将 EXIF 的有理数值安全转换为 float。"""
+    if value is None:
+        return None
+
+    # PIL 的 IFDRational 支持直接 float(value)
+    try:
+        return float(value)
+    except Exception:
+        pass
+
+    if isinstance(value, (tuple, list)) and len(value) == 2:
+        numerator, denominator = value
+        try:
+            denominator_float = float(denominator)
+            if denominator_float == 0:
+                return None
+            return float(numerator) / denominator_float
+        except Exception:
+            return None
+    return None
+
+
+def _dms_to_degrees(dms_value) -> Optional[float]:
+    """将度分秒坐标转换为十进制度。"""
+    if not isinstance(dms_value, (tuple, list)) or len(dms_value) != 3:
+        return None
+
+    degrees = _to_float(dms_value[0])
+    minutes = _to_float(dms_value[1])
+    seconds = _to_float(dms_value[2])
+
+    if degrees is None or minutes is None or seconds is None:
+        return None
+
+    return degrees + (minutes / 60.0) + (seconds / 3600.0)
+
+
+def extract_gps_coordinates(file: UploadFile) -> Optional[Tuple[float, float]]:
+    """
+    从图片 EXIF 中提取 GPS 经纬度。
+
+    返回:
+        (lat, lon) 或 None
+    """
+    try:
+        file.file.seek(0)
+        with Image.open(file.file) as img:
+            exif = img.getexif()
+            if not exif:
+                return None
+
+            # 34853 = GPSInfo
+            gps_info = exif.get_ifd(34853) if hasattr(exif, "get_ifd") else exif.get(34853)
+            if not gps_info:
+                return None
+
+            lat_ref = gps_info.get(1)  # N/S
+            lat_dms = gps_info.get(2)
+            lon_ref = gps_info.get(3)  # E/W
+            lon_dms = gps_info.get(4)
+
+            if isinstance(lat_ref, bytes):
+                lat_ref = lat_ref.decode("utf-8", errors="ignore")
+            if isinstance(lon_ref, bytes):
+                lon_ref = lon_ref.decode("utf-8", errors="ignore")
+
+            lat = _dms_to_degrees(lat_dms)
+            lon = _dms_to_degrees(lon_dms)
+            if lat is None or lon is None:
+                return None
+
+            if str(lat_ref).upper() == "S":
+                lat = -lat
+            if str(lon_ref).upper() == "W":
+                lon = -lon
+
+            return lat, lon
+    except Exception:
+        return None
+    finally:
+        # 还原指针，避免影响后续保存流程
+        try:
+            file.file.seek(0)
+        except Exception:
+            pass
+
+
+def reverse_geocode_city(lat: float, lon: float) -> Optional[str]:
+    """
+    逆地理编码到城市（测试版：使用 Nominatim）。
+
+    失败时返回 None，不中断主流程。
+    """
+    try:
+        params = urlencode({
+            "format": "jsonv2",
+            "lat": f"{lat:.8f}",
+            "lon": f"{lon:.8f}",
+            "zoom": 10,
+            "addressdetails": 1,
+            "accept-language": "zh-CN,zh",
+        })
+        url = f"https://nominatim.openstreetmap.org/reverse?{params}"
+        req = Request(url, headers={"User-Agent": "memento/1.0 city-extractor"})
+
+        with urlopen(req, timeout=5) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+            data = json.loads(raw)
+
+        address = data.get("address", {})
+        city = (
+            address.get("city")
+            or address.get("town")
+            or address.get("municipality")
+            or address.get("county")
+            or address.get("state")
+        )
+        if not city:
+            return None
+
+        return str(city).strip() or None
+    except Exception:
+        return None
+
+
+def extract_city_from_image(file: UploadFile) -> Optional[str]:
+    """
+    一步提取图片城市信息：
+    EXIF GPS -> 逆地理编码（市级）。
+    """
+    coords = extract_gps_coordinates(file)
+    if not coords:
+        return None
+    lat, lon = coords
+    return reverse_geocode_city(lat, lon)

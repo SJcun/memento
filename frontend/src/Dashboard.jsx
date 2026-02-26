@@ -341,7 +341,7 @@ export default function Dashboard({ userConfig, onLogout }) {
   const [exportRange, setExportRange] = useState({ start: '', end: '' });
 
   // 涓存椂鐘舵€?
-  const [tempEvent, setTempEvent] = useState({ title: '', content: '', mood: 'neutral', images: [], imagesOriginal: [], imageFiles: [] });
+  const [tempEvent, setTempEvent] = useState({ title: '', content: '', mood: 'neutral', city: null, images: [], imagesOriginal: [], imageFiles: [] });
   const [tempGoal, setTempGoal] = useState('');
   const [dobYear, setDobYear] = useState(new Date().getFullYear() - 25); // 榛樿25宀?
   const [dobMonth, setDobMonth] = useState(1); // 1-12
@@ -846,6 +846,42 @@ export default function Dashboard({ userConfig, onLogout }) {
     return weeks;
   }, [events, heatmapYear, heatmapYears]);
 
+  const onThisDayRecords = useMemo(() => {
+    const today = startOfDay(new Date());
+    const todayTimestamp = today.getTime();
+    const month = today.getMonth();
+    const day = today.getDate();
+    const currentYear = today.getFullYear();
+
+    return Object.entries(events)
+      .map(([dateKey, event]) => {
+        if (!event) return null;
+        const parsedDate = parseDateKey(dateKey);
+        if (!parsedDate) return null;
+        if (parsedDate.getTime() >= todayTimestamp) return null;
+        if (parsedDate.getMonth() !== month || parsedDate.getDate() !== day) return null;
+
+        const yearsAgo = currentYear - parsedDate.getFullYear();
+        if (yearsAgo <= 0) return null;
+
+        const rawTitle = typeof event.title === 'string' ? event.title.trim() : '';
+        const rawContent = typeof event.content === 'string' ? event.content.trim() : '';
+        const preview = rawContent ? rawContent.replace(/\s+/g, ' ').slice(0, 100) : '';
+
+        return {
+          dateKey,
+          date: parsedDate,
+          yearsAgo,
+          title: rawTitle || '（无标题）',
+          preview,
+          mood: event.mood,
+          image: event.images?.[0] || event.image || null,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.date.getTime() - a.date.getTime());
+  }, [events]);
+
   // 处理目标完成/取消完成
   const handleGoalToggle = async (goalId) => {
     const goal = goals.find(g => g.id === goalId);
@@ -930,7 +966,7 @@ export default function Dashboard({ userConfig, onLogout }) {
       return;
     }
 
-    const existing = events[dateKey] || { title: '', content: '', mood: 'neutral', image: '', imageOriginal: '', images: [], imagesOriginal: [] };
+    const existing = events[dateKey] || { title: '', content: '', mood: 'neutral', city: null, image: '', imageOriginal: '', images: [], imagesOriginal: [] };
     setSelectedDate({ dateKey, date: new Date(`${dateKey}T00:00:00`) });
 
     // 澶勭悊鍚戝悗鍏煎锛氬鏋滃彧鏈夊崟涓浘鐗囧瓧娈碉紝杞崲涓烘暟缁?
@@ -941,6 +977,7 @@ export default function Dashboard({ userConfig, onLogout }) {
       title: existing.title || '',
       content: existing.content || '',
       mood: existing.mood || 'neutral',
+      city: existing.city || null,
       images,
       imagesOriginal,
       imageFiles: []
@@ -1415,8 +1452,8 @@ export default function Dashboard({ userConfig, onLogout }) {
         {/* 浠〃鐩樼粺璁?*/}
         <section className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4">
            <Card className="p-3 sm:p-6"><div className="text-xs text-neutral-400">人生时钟</div><div className="text-xl sm:text-3xl font-bold">{stats?.time || '--:--'}</div></Card>
-           <Card className="p-3 sm:p-6"><div className="text-xs text-neutral-400">已活天数</div><div className="text-xl sm:text-3xl font-bold">{stats?.daysLived || '--'}</div></Card>
-           <Card className="p-3 sm:p-6"><div className="text-xs text-neutral-400">已活年数</div><div className="text-xl sm:text-3xl font-bold">{stats?.yearsLived || '--'}</div></Card>
+          <Card className="p-3 sm:p-6"><div className="text-xs text-neutral-400">出生天数</div><div className="text-xl sm:text-3xl font-bold">{stats?.daysLived || '--'}</div></Card>
+          <Card className="p-3 sm:p-6"><div className="text-xs text-neutral-400">年龄</div><div className="text-xl sm:text-3xl font-bold">{stats?.yearsLived || '--'}</div></Card>
            <Card className="p-3 sm:p-6"><div className="text-xs text-neutral-400">人生进度</div><div className="text-xl sm:text-3xl font-bold">{stats?.progress || '--'}%</div></Card>
         </section>
 
@@ -1729,6 +1766,59 @@ export default function Dashboard({ userConfig, onLogout }) {
                         </div>
                     </div>
                 </Card>
+
+                <Card className="p-3 sm:p-4">
+                    <div className="flex items-center justify-between mb-3">
+                        <span className="font-bold text-sm sm:text-base">往年今日</span>
+                        <span className="text-xs text-neutral-500">
+                            {`${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`}
+                        </span>
+                    </div>
+                    {onThisDayRecords.length === 0 ? (
+                        <div className="rounded-lg border border-dashed border-neutral-700 bg-neutral-900/40 px-3 py-6 text-center text-sm text-neutral-500">
+                            这一天在往年还没有记录
+                        </div>
+                    ) : (
+                        <div className="space-y-2">
+                            {onThisDayRecords.slice(0, 6).map((record) => (
+                                <button
+                                    key={record.dateKey}
+                                    onClick={() => handleGridClick(record.dateKey, false)}
+                                    className="w-full text-left rounded-lg border border-neutral-700/80 bg-neutral-900/50 hover:border-neutral-500 hover:bg-neutral-900 px-3 py-2 transition-colors"
+                                >
+                                    <div className="flex items-center gap-3">
+                                        {record.image ? (
+                                            <img
+                                                src={record.image}
+                                                alt={record.title}
+                                                className="w-12 h-12 rounded-md object-cover border border-neutral-700 shrink-0"
+                                            />
+                                        ) : (
+                                            <div className="w-12 h-12 rounded-md border border-neutral-700 bg-neutral-800/70 text-neutral-500 flex items-center justify-center text-[11px] shrink-0">
+                                                无图
+                                            </div>
+                                        )}
+                                        <div className="min-w-0 flex-1">
+                                            <div className="flex items-center gap-2 text-xs text-neutral-400">
+                                                <span>{record.dateKey}</span>
+                                                <span>{record.yearsAgo} 年前</span>
+                                                {record.mood && moodConfig[record.mood] && (
+                                                    <span className="px-1.5 py-0.5 rounded bg-neutral-800 border border-neutral-700 text-[10px] text-neutral-300">
+                                                        {moodConfig[record.mood].label}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <div className="mt-1 text-sm font-medium text-neutral-100 truncate">{record.title}</div>
+                                            {record.preview && (
+                                                <div className="mt-0.5 text-xs text-neutral-500 truncate">{record.preview}</div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </Card>
             </div>
 
             {/* 渚ц竟鏍?*/}
@@ -2025,6 +2115,12 @@ export default function Dashboard({ userConfig, onLogout }) {
                         <button key={key} onClick={()=>setTempEvent({...tempEvent, mood:key})} className={`flex-1 p-2 rounded border text-sm ${tempEvent.mood===key ? 'bg-white text-black border-white' : 'border-neutral-700 hover:bg-neutral-800'}`}>{config.label}</button>
                     ))}
                 </div>
+
+                {tempEvent.city && (
+                    <div className="text-xs text-neutral-400 bg-neutral-900/60 border border-neutral-800 rounded-md px-3 py-2">
+                        拍摄城市（自动识别）：<span className="text-neutral-200">{tempEvent.city}</span>
+                    </div>
+                )}
 
                 {/* 璇︽儏杈撳叆 + 琛ㄦ儏閫夋嫨鍣?*/}
                 <div className="space-y-2">

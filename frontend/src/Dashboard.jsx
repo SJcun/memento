@@ -535,6 +535,10 @@ export default function Dashboard({ userConfig, onLogout }) {
   }, [events]);
 
   // 杩囨护鐩爣锛氬彧鏄剧ず鏈畬鎴愭垨鏈€杩?澶╁唴瀹屾垚鐨勭洰鏍?
+  const recentPhotoWall = useMemo(() => {
+    return galleryImages.slice(0, 9);
+  }, [galleryImages]);
+
   const filteredGoals = useMemo(() => {
     const now = new Date();
     const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
@@ -1842,6 +1846,67 @@ export default function Dashboard({ userConfig, onLogout }) {
                             </div>
                         ))}
                     </div>
+                 </Card>
+
+                 {/* 最近照片墙 */}
+                 <Card className="p-4 sm:p-5">
+                    <div className="flex items-center justify-between mb-3">
+                        <h3 className="font-bold flex items-center gap-2"><ImageIcon size={18}/> 最近照片墙</h3>
+                        <button
+                            onClick={() => setIsGalleryOpen(true)}
+                            className="text-xs text-neutral-400 hover:text-white transition-colors"
+                        >
+                            查看全部
+                        </button>
+                    </div>
+                    {recentPhotoWall.length === 0 ? (
+                        <div className="rounded-lg border border-dashed border-neutral-700 bg-neutral-900/40 px-3 py-8 text-center text-sm text-neutral-500">
+                            还没有照片，记录一天就会出现在这里
+                        </div>
+                    ) : (
+                        <div className="relative">
+                            <div className="absolute -inset-3 bg-gradient-to-br from-white/[0.05] via-transparent to-yellow-400/[0.08] blur-2xl pointer-events-none" />
+                            <div className="relative grid grid-cols-3 gap-2">
+                                {Array.from({ length: 9 }).map((_, index) => {
+                                    const photo = recentPhotoWall[index];
+                                    if (!photo) {
+                                        return (
+                                            <div
+                                                key={`photo-empty-${index}`}
+                                                className="aspect-square rounded-lg border border-dashed border-neutral-700/80 bg-neutral-900/30 flex items-center justify-center text-[11px] text-neutral-600"
+                                            >
+                                                待记录
+                                            </div>
+                                        );
+                                    }
+
+                                    return (
+                                        <button
+                                            key={photo.id}
+                                            onClick={() => {
+                                                setPreviewImageSrc(photo.imageOriginal || photo.image);
+                                                setIsImagePreviewOpen(true);
+                                                setIsPreviewFullScreen(false);
+                                            }}
+                                            className="group relative aspect-square overflow-hidden rounded-lg border border-neutral-700/80 bg-neutral-900 hover:border-neutral-500 transition-all duration-200 hover:-translate-y-0.5"
+                                            title={photo.eventTitle || photo.dateKey}
+                                        >
+                                            <img
+                                                src={photo.image}
+                                                alt={photo.eventTitle || `最近照片 ${index + 1}`}
+                                                loading="lazy"
+                                                className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                                            />
+                                            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                                            <div className="absolute left-1 right-1 bottom-1 text-[10px] text-neutral-200 truncate opacity-0 group-hover:opacity-100 transition-opacity">
+                                                {photo.dateKey}
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
                  </Card>
 
                  {/* 日历 */}

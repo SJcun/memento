@@ -259,7 +259,12 @@ const formatTimeLabel = (dateTimeLike) => {
   if (!dateTimeLike) return '--:--';
   const dt = new Date(dateTimeLike);
   if (Number.isNaN(dt.getTime())) return '--:--';
-  return `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
+  return dt.toLocaleTimeString('zh-CN', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Asia/Shanghai'
+  });
 };
 
 const parseDateKey = (dateKey) => {

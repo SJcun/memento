@@ -5,8 +5,13 @@ API路由模块
 
 import json
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
+try:
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+except Exception:  # pragma: no cover
+    ZoneInfo = None
+    ZoneInfoNotFoundError = Exception
 
 from fastapi import APIRouter, Depends, Form, UploadFile, File, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -26,6 +31,13 @@ from utils import process_image, validate_image_size, extract_city_from_image
 
 # 创建API路由组
 router = APIRouter(tags=["api"])
+
+try:
+    BEIJING_TZ = ZoneInfo("Asia/Shanghai") if ZoneInfo else timezone(timedelta(hours=8), name="Asia/Shanghai")
+except ZoneInfoNotFoundError:
+    # Windows/Python environments without tzdata still need deterministic Beijing time.
+    BEIJING_TZ = timezone(timedelta(hours=8), name="Asia/Shanghai")
+SERVER_LOCAL_TZ = datetime.now().astimezone().tzinfo or timezone.utc
 
 
 def _parse_date(date_str: str, *, field: str = "date") -> date:
@@ -48,6 +60,47 @@ def _json_list(raw: Optional[str]) -> List[Any]:
         return parsed if isinstance(parsed, list) else []
     except Exception:
         return []
+
+
+def _beijing_now() -> datetime:
+    return datetime.now(BEIJING_TZ)
+
+
+def _beijing_today() -> date:
+    return _beijing_now().date()
+
+
+def _to_beijing_iso(dt: Optional[datetime]) -> Optional[str]:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        # habit_logs.created_at is stored as naive UTC
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(BEIJING_TZ).isoformat(timespec="seconds")
+
+
+def _normalize_iso_time_to_beijing(raw: Any) -> Any:
+    """Normalize ISO datetime text to Asia/Shanghai; keep non-time values unchanged."""
+    if not isinstance(raw, str):
+        return raw
+
+    text = raw.strip()
+    if not text:
+        return raw
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+
+    try:
+        dt = datetime.fromisoformat(text)
+    except Exception:
+        return raw
+
+    if dt.tzinfo is None:
+        # Legacy instant-action values may not carry timezone info.
+        # Interpret them in server local timezone, then convert to Beijing.
+        dt = dt.replace(tzinfo=SERVER_LOCAL_TZ)
+
+    return dt.astimezone(BEIJING_TZ).isoformat(timespec="seconds")
 
 
 def _normalize_tags(tags: Optional[List[str]], *, max_count: int = 5, max_length: int = 12) -> List[str]:
@@ -114,7 +167,7 @@ def _serialize_habit_log(log: HabitLog, habit: Optional[Habit] = None) -> Dict[s
         "value": log.value,
         "completed": log.completed,
         "note": log.note,
-        "created_at": log.created_at.isoformat() if log.created_at else None,
+        "created_at": _to_beijing_iso(log.created_at),
     }
     if habit is not None:
         result.update({
@@ -187,7 +240,7 @@ def _compute_habit_streak(completed_dates: List[date]) -> int:
     if not completed_dates:
         return 0
     completed_set = set(completed_dates)
-    cursor = date.today()
+    cursor = _beijing_today()
     if cursor not in completed_set:
         cursor = cursor - timedelta(days=1)
 
@@ -397,6 +450,14 @@ async def get_events(
                     instant_actions = parsed_actions
             except Exception:
                 instant_actions = []
+        normalized_actions = []
+        for item in instant_actions:
+            if isinstance(item, dict):
+                copied = dict(item)
+                copied["created_at"] = _normalize_iso_time_to_beijing(copied.get("created_at"))
+                normalized_actions.append(copied)
+            else:
+                normalized_actions.append(item)
 
         # 返回第一张缩略图作为主图（向后兼容），同时返回所有图片
         result[key] = {
@@ -410,7 +471,7 @@ async def get_events(
             "imageOriginal": original_paths[0] if original_paths else None,  # 第一张原图（向后兼容）
             "images": thumbnail_paths,  # 所有缩略图
             "imagesOriginal": original_paths,  # 所有原图
-            "instantActions": instant_actions,  # 当日即刻行动记录
+            "instantActions": normalized_actions,  # 当日即刻行动记录（北京时间）
         }
 
     return result
@@ -472,7 +533,7 @@ async def save_event(
     event.title = title
     event.content = content
     event.mood = mood
-    event.updated_at = date.today()
+    event.updated_at = _beijing_today()
 
     # 处理图片上传（支持多张图片）
     all_images = []
@@ -565,7 +626,7 @@ async def create_instant_action(
 ):
     """为指定日期添加一条即刻行动记录。"""
     target_date = _parse_date(entry_date, field="entry_date")
-    if target_date > date.today():
+    if target_date > _beijing_today():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="不能在未来日期创建即刻行动"
@@ -603,12 +664,12 @@ async def create_instant_action(
         "id": f"ia_{uuid.uuid4().hex[:8]}",
         "content": content,
         "tags": tags,
-        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "created_at": _beijing_now().isoformat(timespec="seconds"),
     }
     instant_actions.append(new_item)
 
     event.instant_actions = json.dumps(instant_actions, ensure_ascii=False)
-    event.updated_at = date.today()
+    event.updated_at = _beijing_today()
     db.commit()
 
     return {"msg": "instant action saved", "item": new_item}
@@ -647,7 +708,7 @@ async def delete_instant_action(
         )
 
     event.instant_actions = json.dumps(remaining_actions, ensure_ascii=False) if remaining_actions else None
-    event.updated_at = date.today()
+    event.updated_at = _beijing_today()
     db.commit()
 
     return {"msg": "instant action deleted"}
@@ -942,8 +1003,8 @@ async def get_upcoming_special_days(
     current_user: User = Depends(get_current_user)
 ):
     """获取即将到来的纪念日/计划日（未来N天内）"""
-    today = date.today()
-    future_date = date(today.year, today.month, today.day + days)
+    today = _beijing_today()
+    future_date = today + timedelta(days=days)
 
     # 获取用户的所有纪念日
     all_special_days = db.query(SpecialDay).filter(SpecialDay.user_id == current_user.id).all()
@@ -1022,7 +1083,7 @@ async def create_goal(
         completed_at=completed_at_date,
         week_year=goal.week_year,
         week_index=goal.week_index,
-        created_at=date.today()
+        created_at=_beijing_today()
     )
 
     db.add(new_goal)
@@ -1068,7 +1129,7 @@ async def update_goal(
 
         # 如果标记为完成且没有完成时间，设置为当前时间
         if goal_update.completed and goal.completed_at is None:
-            goal.completed_at = date.today()
+            goal.completed_at = _beijing_today()
         # 如果取消完成，清除完成时间
         elif not goal_update.completed:
             goal.completed_at = None
@@ -1179,7 +1240,7 @@ async def create_habit(
     frequency_value = _normalize_frequency(frequency_type, payload.frequency_value)
 
     tags = _normalize_tags(payload.tags)
-    start_date = _parse_date(payload.start_date, field="start_date") if payload.start_date else date.today()
+    start_date = _parse_date(payload.start_date, field="start_date") if payload.start_date else _beijing_today()
 
     target_value = payload.target_value
     unit = (payload.unit or "").strip() or None
@@ -1204,7 +1265,7 @@ async def create_habit(
         start_date=start_date,
         reminder_time=(payload.reminder_time or "").strip() or None,
         is_active=True,
-        created_at=date.today(),
+        created_at=_beijing_today(),
     )
     db.add(habit)
     db.commit()
@@ -1337,8 +1398,8 @@ async def upsert_habit_log(
     if not habit:
         raise HTTPException(status_code=404, detail="行为不存在或已停用")
 
-    log_date = _parse_date(payload.log_date, field="log_date") if payload.log_date else date.today()
-    if log_date > date.today():
+    log_date = _parse_date(payload.log_date, field="log_date") if payload.log_date else _beijing_today()
+    if log_date > _beijing_today():
         raise HTTPException(status_code=400, detail="不能记录未来日期的打卡")
     if habit.start_date and log_date < habit.start_date:
         raise HTTPException(status_code=400, detail="不能记录开始日期之前的打卡")
@@ -1419,7 +1480,7 @@ async def get_today_habits(
     current_user: User = Depends(get_current_user),
 ):
     """获取今日长期行为打卡状态。"""
-    today = date.today()
+    today = _beijing_today()
     habits = db.query(Habit).filter(
         Habit.user_id == current_user.id,
         Habit.is_active == True,  # noqa: E712
@@ -1502,7 +1563,7 @@ async def get_habit_stats(
     ).order_by(HabitLog.log_date.asc()).all()
     completed_dates = [log.log_date for log in completed_logs]
 
-    today = date.today()
+    today = _beijing_today()
     range_start = today - timedelta(days=29)
     recent_logs = db.query(HabitLog).filter(
         HabitLog.habit_id == habit.id,

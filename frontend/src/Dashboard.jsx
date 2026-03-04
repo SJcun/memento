@@ -437,8 +437,12 @@ export default function Dashboard({ userConfig, onLogout }) {
   const [dobYear, setDobYear] = useState(new Date().getFullYear() - 25); // 榛樿25宀?
   const [dobMonth, setDobMonth] = useState(1); // 1-12
   const [dobDay, setDobDay] = useState(1); // 1-31
+  const [titleSelection, setTitleSelection] = useState({ start: null, end: null });
+  const [contentSelection, setContentSelection] = useState({ start: null, end: null });
   const fileInputRef = useRef(null);
   const avatarInputRef = useRef(null);
+  const titleInputRef = useRef(null);
+  const contentTextareaRef = useRef(null);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
 
   // 鍒濆鍖栧姞杞芥暟鎹?
@@ -1025,6 +1029,62 @@ export default function Dashboard({ userConfig, onLogout }) {
     });
   }, [events, selectedDate?.dateKey]);
 
+  const updateTitleCursor = () => {
+    const el = titleInputRef.current;
+    if (!el) return;
+    setTitleSelection({
+      start: typeof el.selectionStart === 'number' ? el.selectionStart : null,
+      end: typeof el.selectionEnd === 'number' ? el.selectionEnd : null
+    });
+  };
+
+  const updateContentCursor = () => {
+    const el = contentTextareaRef.current;
+    if (!el) return;
+    setContentSelection({
+      start: typeof el.selectionStart === 'number' ? el.selectionStart : null,
+      end: typeof el.selectionEnd === 'number' ? el.selectionEnd : null
+    });
+  };
+
+  const insertEmojiAtCursor = (field, emoji) => {
+    const isTitle = field === 'title';
+    const ref = isTitle ? titleInputRef : contentTextareaRef;
+    const fallbackSelection = isTitle ? titleSelection : contentSelection;
+    const currentValue = `${tempEvent[field] || ''}`;
+
+    let start = fallbackSelection.start;
+    let end = fallbackSelection.end;
+    const el = ref.current;
+    if (el && typeof el.selectionStart === 'number' && typeof el.selectionEnd === 'number') {
+      start = el.selectionStart;
+      end = el.selectionEnd;
+    }
+
+    if (typeof start !== 'number' || typeof end !== 'number') {
+      start = currentValue.length;
+      end = currentValue.length;
+    }
+
+    const nextValue = currentValue.slice(0, start) + emoji + currentValue.slice(end);
+    const nextCursor = start + emoji.length;
+
+    setTempEvent(prev => ({ ...prev, [field]: nextValue }));
+    if (isTitle) {
+      setTitleSelection({ start: nextCursor, end: nextCursor });
+    } else {
+      setContentSelection({ start: nextCursor, end: nextCursor });
+    }
+
+    // 等待状态更新后恢复焦点与光标位置
+    setTimeout(() => {
+      const target = ref.current;
+      if (!target) return;
+      target.focus();
+      target.setSelectionRange(nextCursor, nextCursor);
+    }, 0);
+  };
+
   const refreshEventsData = async () => {
     const updatedData = await fetchEvents();
     setEvents(updatedData);
@@ -1363,6 +1423,8 @@ export default function Dashboard({ userConfig, onLogout }) {
       imagesOriginal,
       imageFiles: []
     });
+    setTitleSelection({ start: null, end: null });
+    setContentSelection({ start: null, end: null });
     setIsEditModalOpen(true);
   };
 
@@ -2944,8 +3006,13 @@ export default function Dashboard({ userConfig, onLogout }) {
                 <div className="space-y-2">
                     <div className="relative">
                         <input
+                            ref={titleInputRef}
                             value={tempEvent.title || ''}
                             onChange={e=>setTempEvent({...tempEvent, title:e.target.value})}
+                            onSelect={updateTitleCursor}
+                            onKeyUp={updateTitleCursor}
+                            onClick={updateTitleCursor}
+                            onFocus={updateTitleCursor}
                             placeholder="标题"
                             className="w-full bg-black border border-neutral-700 p-3 pr-12 rounded text-white focus:outline-none focus:border-neutral-500"
                         />
@@ -2965,7 +3032,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                             <div className="bg-neutral-900 border border-neutral-700 rounded-lg shadow-xl">
                                 <EmojiPicker
                                     onEmojiClick={(emojiData) => {
-                                        setTempEvent({...tempEvent, title: (tempEvent.title || '') + emojiData.emoji});
+                                        insertEmojiAtCursor('title', emojiData.emoji);
                                         setShowTitleEmojiPicker(false);
                                     }}
                                     width={320}
@@ -2999,8 +3066,13 @@ export default function Dashboard({ userConfig, onLogout }) {
                 <div className="space-y-2">
                     <div className="relative">
                         <textarea
+                            ref={contentTextareaRef}
                             value={tempEvent.content || ''}
                             onChange={e=>setTempEvent({...tempEvent, content:e.target.value})}
+                            onSelect={updateContentCursor}
+                            onKeyUp={updateContentCursor}
+                            onClick={updateContentCursor}
+                            onFocus={updateContentCursor}
                             placeholder="详情..."
                             className="w-full min-h-32 h-48 bg-black border border-neutral-700 p-3 pr-12 rounded text-white resize-y focus:outline-none focus:border-neutral-500"
                         />
@@ -3020,7 +3092,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                             <div className="bg-neutral-900 border border-neutral-700 rounded-lg shadow-xl">
                                 <EmojiPicker
                                     onEmojiClick={(emojiData) => {
-                                        setTempEvent({...tempEvent, content: (tempEvent.content || '') + emojiData.emoji});
+                                        insertEmojiAtCursor('content', emojiData.emoji);
                                         setShowContentEmojiPicker(false);
                                     }}
                                     width={320}

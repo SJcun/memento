@@ -3,7 +3,7 @@ import {
   Clock, Moon, Calendar, CalendarDays, Heart, Smile, Frown, Plus, X, Save, Trash2,
   MoreHorizontal, Info, ChevronLeft, ChevronRight, CheckCircle2, Circle,
   Target, Image as ImageIcon, Upload, Link as LinkIcon, LayoutGrid,
-  Download, FileText, Maximize2, LogOut, UserPlus
+  Download, FileText, Maximize2, LogOut, UserPlus, Zap
 } from 'lucide-react';
 import EmojiPicker from 'emoji-picker-react';
 import emojisZhData from 'emoji-picker-react/dist/data/emojis-zh';
@@ -128,6 +128,51 @@ const fetchUpcomingSpecialDays = async (days = 7) => {
     return res.data;
 }
 
+// --- 即刻行动 API ---
+const createInstantAction = async (entryDate, content, tags = []) => {
+    const res = await api.post(`/events/${entryDate}/instant-actions`, {
+        content,
+        tags
+    });
+    return res.data;
+}
+
+const deleteInstantAction = async (entryDate, actionId) => {
+    const res = await api.delete(`/events/${entryDate}/instant-actions/${actionId}`);
+    return res.data;
+}
+
+// --- 长期行为打卡 API ---
+const createHabit = async (habitData) => {
+    const res = await api.post('/habits', habitData);
+    return res.data;
+}
+
+const finishHabit = async (habitId) => {
+    const res = await api.delete(`/habits/${habitId}`);
+    return res.data;
+}
+
+const fetchTodayHabits = async () => {
+    const res = await api.get('/habits/today');
+    return res.data;
+}
+
+const upsertHabitLog = async (habitId, payload) => {
+    const res = await api.post(`/habits/${habitId}/logs`, payload);
+    return res.data;
+}
+
+const deleteHabitLog = async (habitId, logDate) => {
+    const res = await api.delete(`/habits/${habitId}/logs/${logDate}`);
+    return res.data;
+}
+
+const fetchHabitLogsByDate = async (logDate) => {
+    const res = await api.get(`/habits/logs/${logDate}`);
+    return res.data;
+}
+
 // --- 鍔ㄦ€佸姞杞藉鍑哄簱 ---
 const loadScript = (src) => {
   return new Promise((resolve, reject) => {
@@ -146,7 +191,7 @@ const loadExportLibraries = async () => {
       loadScript('https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js')
     ]);
     return true;
-  } catch (e) { return false; }
+  } catch { return false; }
 };
 
 // --- 工具函数 ---
@@ -210,6 +255,13 @@ const formatDate = (dateLike) => {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 };
 
+const formatTimeLabel = (dateTimeLike) => {
+  if (!dateTimeLike) return '--:--';
+  const dt = new Date(dateTimeLike);
+  if (Number.isNaN(dt.getTime())) return '--:--';
+  return `${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
+};
+
 const parseDateKey = (dateKey) => {
   if (typeof dateKey !== 'string') return null;
   const match = dateKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -270,6 +322,33 @@ export default function Dashboard({ userConfig, onLogout }) {
   const [goals, setGoals] = useState([]);
   const [specialDays, setSpecialDays] = useState([]);
   const [upcomingReminders, setUpcomingReminders] = useState([]);
+  const [todayHabits, setTodayHabits] = useState([]);
+
+  // 即刻行动相关
+  const [isInstantActionModalOpen, setIsInstantActionModalOpen] = useState(false);
+  const [isSavingInstantAction, setIsSavingInstantAction] = useState(false);
+  const [instantActionForm, setInstantActionForm] = useState({ content: '', tags: [], tagInput: '' });
+  const [todayInstantTagFilter, setTodayInstantTagFilter] = useState('全部');
+
+  // 长期行为打卡相关
+  const [isHabitModalOpen, setIsHabitModalOpen] = useState(false);
+  const [isCreatingHabit, setIsCreatingHabit] = useState(false);
+  const [habitForm, setHabitForm] = useState({
+    name: '',
+    mode: 'binary',
+    frequencyType: 'daily',
+    frequencyTimes: 3,
+    weeklyDays: [],
+    targetValue: '',
+    unit: '分钟',
+    tags: [],
+    tagInput: '',
+    startDate: formatDate(new Date()),
+    reminderTime: ''
+  });
+  const [habitValueDrafts, setHabitValueDrafts] = useState({});
+  const [selectedDateHabitLogs, setSelectedDateHabitLogs] = useState([]);
+  const [isLoadingHabitLogs, setIsLoadingHabitLogs] = useState(false);
 
   const [selectedDate, setSelectedDate] = useState(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -317,6 +396,18 @@ export default function Dashboard({ userConfig, onLogout }) {
   const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
   const [calendarView, setCalendarView] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() });
   const [heatmapYear, setHeatmapYear] = useState(new Date().getFullYear());
+  const quickInstantTags = ['运动', '学习', '工作', '家务', '社交'];
+  const quickHabitTags = ['健康', '学习', '工作', '家庭', '成长'];
+  const weekDayOptions = [
+    { value: 0, label: '一' },
+    { value: 1, label: '二' },
+    { value: 2, label: '三' },
+    { value: 3, label: '四' },
+    { value: 4, label: '五' },
+    { value: 5, label: '六' },
+    { value: 6, label: '日' }
+  ];
+  const todayDateKey = formatDate(new Date());
 
   // 杈呭姪鍑芥暟锛氳绠楃粰瀹氱洰鏍囨棩鏈熸椂鐨勫勾榫勶紙瀹屾暣骞存暟锛?
   const getAgeAtDate = (targetDate) => {
@@ -359,6 +450,10 @@ export default function Dashboard({ userConfig, onLogout }) {
         fetchEvents().then(data => {
             setEvents(data);
         }).catch(err => console.error("加载数据失败", err));
+
+        fetchTodayHabits().then(data => {
+            setTodayHabits(Array.isArray(data) ? data : []);
+        }).catch(err => console.error("加载今日打卡失败", err));
     }
   }, [config]);
 
@@ -565,7 +660,7 @@ export default function Dashboard({ userConfig, onLogout }) {
         setConfig(newConfig);
         // 3. 鏇存柊缂撳瓨锛岄槻姝㈠埛鏂颁涪澶?
         localStorage.setItem('user_config', JSON.stringify(newConfig));
-    } catch (err) {
+    } catch {
         alert("保存失败，请检查网络");
     }
   };
@@ -886,6 +981,288 @@ export default function Dashboard({ userConfig, onLogout }) {
       .sort((a, b) => b.date.getTime() - a.date.getTime());
   }, [events]);
 
+  const todayInstantActions = useMemo(() => {
+    const actions = events[todayDateKey]?.instantActions;
+    if (!Array.isArray(actions)) return [];
+    return [...actions].sort((a, b) => {
+      const aTime = new Date(a?.created_at || 0).getTime();
+      const bTime = new Date(b?.created_at || 0).getTime();
+      return bTime - aTime;
+    });
+  }, [events, todayDateKey]);
+
+  const todayInstantActionTags = useMemo(() => {
+    const tags = new Set();
+    todayInstantActions.forEach(item => {
+      if (Array.isArray(item?.tags)) {
+        item.tags.forEach(tag => {
+          if (typeof tag === 'string' && tag.trim()) tags.add(tag.trim());
+        });
+      }
+    });
+    return ['全部', ...Array.from(tags)];
+  }, [todayInstantActions]);
+
+  const filteredTodayInstantActions = useMemo(() => {
+    if (todayInstantTagFilter === '全部') return todayInstantActions;
+    return todayInstantActions.filter(item => Array.isArray(item?.tags) && item.tags.includes(todayInstantTagFilter));
+  }, [todayInstantActions, todayInstantTagFilter]);
+
+  useEffect(() => {
+    if (!todayInstantActionTags.includes(todayInstantTagFilter)) {
+      setTodayInstantTagFilter('全部');
+    }
+  }, [todayInstantActionTags, todayInstantTagFilter]);
+
+  const selectedDateInstantActions = useMemo(() => {
+    if (!selectedDate?.dateKey) return [];
+    const actions = events[selectedDate.dateKey]?.instantActions;
+    if (!Array.isArray(actions)) return [];
+    return [...actions].sort((a, b) => {
+      const aTime = new Date(a?.created_at || 0).getTime();
+      const bTime = new Date(b?.created_at || 0).getTime();
+      return bTime - aTime;
+    });
+  }, [events, selectedDate?.dateKey]);
+
+  const refreshEventsData = async () => {
+    const updatedData = await fetchEvents();
+    setEvents(updatedData);
+  };
+
+  const refreshTodayHabitsData = async () => {
+    const habits = await fetchTodayHabits();
+    setTodayHabits(Array.isArray(habits) ? habits : []);
+  };
+
+  const addInstantTag = (rawTag) => {
+    const cleaned = `${rawTag || ''}`.trim();
+    if (!cleaned) return;
+    if (cleaned.length > 12) {
+      alert('标签长度不能超过12个字符');
+      return;
+    }
+    setInstantActionForm(prev => {
+      if (prev.tags.includes(cleaned)) return { ...prev, tagInput: '' };
+      if (prev.tags.length >= 5) {
+        alert('标签最多添加5个');
+        return prev;
+      }
+      return { ...prev, tags: [...prev.tags, cleaned], tagInput: '' };
+    });
+  };
+
+  const removeInstantTag = (tag) => {
+    setInstantActionForm(prev => ({ ...prev, tags: prev.tags.filter(t => t !== tag) }));
+  };
+
+  const handleSaveInstantAction = async () => {
+    const content = `${instantActionForm.content || ''}`.trim();
+    if (!content) {
+      alert('请输入即刻行动内容');
+      return;
+    }
+
+    setIsSavingInstantAction(true);
+    try {
+      await createInstantAction(todayDateKey, content, instantActionForm.tags);
+      await refreshEventsData();
+      setInstantActionForm({ content: '', tags: [], tagInput: '' });
+      setIsInstantActionModalOpen(false);
+      alert('已记录到今日日记');
+    } catch (err) {
+      alert('记录失败: ' + (err.response?.data?.detail || '未知错误'));
+    } finally {
+      setIsSavingInstantAction(false);
+    }
+  };
+
+  const handleDeleteInstantAction = async (dateKey, actionId) => {
+    try {
+      await deleteInstantAction(dateKey, actionId);
+      await refreshEventsData();
+    } catch (err) {
+      alert('删除失败: ' + (err.response?.data?.detail || '未知错误'));
+    }
+  };
+
+  const addHabitTag = (rawTag) => {
+    const cleaned = `${rawTag || ''}`.trim();
+    if (!cleaned) return;
+    if (cleaned.length > 12) {
+      alert('标签长度不能超过12个字符');
+      return;
+    }
+    setHabitForm(prev => {
+      if (prev.tags.includes(cleaned)) return { ...prev, tagInput: '' };
+      if (prev.tags.length >= 5) {
+        alert('标签最多添加5个');
+        return prev;
+      }
+      return { ...prev, tags: [...prev.tags, cleaned], tagInput: '' };
+    });
+  };
+
+  const removeHabitTag = (tag) => {
+    setHabitForm(prev => ({ ...prev, tags: prev.tags.filter(t => t !== tag) }));
+  };
+
+  const toggleHabitWeekDay = (dayValue) => {
+    setHabitForm(prev => {
+      const has = prev.weeklyDays.includes(dayValue);
+      const nextDays = has
+        ? prev.weeklyDays.filter(d => d !== dayValue)
+        : [...prev.weeklyDays, dayValue].sort((a, b) => a - b);
+      return { ...prev, weeklyDays: nextDays };
+    });
+  };
+
+  const handleCreateHabit = async () => {
+    const name = `${habitForm.name || ''}`.trim();
+    if (!name) {
+      alert('请输入行为名称');
+      return;
+    }
+
+    const mode = habitForm.mode;
+    const frequencyType = habitForm.frequencyType;
+    let frequencyValue = null;
+
+    if (frequencyType === 'weekly_n') {
+      const n = Number(habitForm.frequencyTimes);
+      if (!Number.isInteger(n) || n < 1 || n > 7) {
+        alert('每周次数必须是 1-7 的整数');
+        return;
+      }
+      frequencyValue = n;
+    } else if (frequencyType === 'weekly_days') {
+      if (habitForm.weeklyDays.length === 0) {
+        alert('请至少选择一个打卡星期');
+        return;
+      }
+      frequencyValue = habitForm.weeklyDays;
+    }
+
+    let targetValue = null;
+    let unit = null;
+    if (mode === 'quantity') {
+      targetValue = Number(habitForm.targetValue);
+      if (!Number.isFinite(targetValue) || targetValue <= 0) {
+        alert('计量型行为的目标值必须大于0');
+        return;
+      }
+      unit = `${habitForm.unit || ''}`.trim();
+      if (!unit) {
+        alert('计量型行为需要填写单位');
+        return;
+      }
+    }
+
+    setIsCreatingHabit(true);
+    try {
+      await createHabit({
+        name,
+        mode,
+        frequency_type: frequencyType,
+        frequency_value: frequencyValue,
+        target_value: targetValue,
+        unit,
+        tags: habitForm.tags,
+        start_date: habitForm.startDate,
+        reminder_time: habitForm.reminderTime || null
+      });
+      await refreshTodayHabitsData();
+      setHabitForm({
+        name: '',
+        mode: 'binary',
+        frequencyType: 'daily',
+        frequencyTimes: 3,
+        weeklyDays: [],
+        targetValue: '',
+        unit: '分钟',
+        tags: [],
+        tagInput: '',
+        startDate: formatDate(new Date()),
+        reminderTime: ''
+      });
+      setIsHabitModalOpen(false);
+      alert('长期行为创建成功');
+    } catch (err) {
+      alert('创建失败: ' + (err.response?.data?.detail || '未知错误'));
+    } finally {
+      setIsCreatingHabit(false);
+    }
+  };
+
+  const handleHabitCheckin = async (habit) => {
+    try {
+      if (habit.mode === 'binary') {
+        await upsertHabitLog(habit.id, {
+          log_date: todayDateKey,
+          completed: true
+        });
+      } else {
+        const valueRaw = habitValueDrafts[habit.id] ?? habit.today?.value ?? '';
+        const value = Number(valueRaw);
+        if (!Number.isFinite(value) || value < 0) {
+          alert('请输入有效的打卡数值');
+          return;
+        }
+        await upsertHabitLog(habit.id, {
+          log_date: todayDateKey,
+          value
+        });
+      }
+      await refreshTodayHabitsData();
+      if (isEditModalOpen && selectedDate?.dateKey === todayDateKey) {
+        const logs = await fetchHabitLogsByDate(todayDateKey);
+        setSelectedDateHabitLogs(Array.isArray(logs) ? logs : []);
+      }
+    } catch (err) {
+      alert('打卡失败: ' + (err.response?.data?.detail || '未知错误'));
+    }
+  };
+
+  const handleHabitUndoToday = async (habitId) => {
+    try {
+      await deleteHabitLog(habitId, todayDateKey);
+      await refreshTodayHabitsData();
+      if (isEditModalOpen && selectedDate?.dateKey === todayDateKey) {
+        const logs = await fetchHabitLogsByDate(todayDateKey);
+        setSelectedDateHabitLogs(Array.isArray(logs) ? logs : []);
+      }
+    } catch (err) {
+      alert('撤销失败: ' + (err.response?.data?.detail || '未知错误'));
+    }
+  };
+
+  const handleDeleteHabitLogInDiary = async (habitId, logDate) => {
+    try {
+      await deleteHabitLog(habitId, logDate);
+      const logs = await fetchHabitLogsByDate(logDate);
+      setSelectedDateHabitLogs(Array.isArray(logs) ? logs : []);
+      if (logDate === todayDateKey) {
+        await refreshTodayHabitsData();
+      }
+    } catch (err) {
+      alert('删除打卡记录失败: ' + (err.response?.data?.detail || '未知错误'));
+    }
+  };
+
+  const handleFinishHabit = async (habitId, habitName) => {
+    if (!confirm(`确认结束打卡行为「${habitName}」吗？结束后不会删除历史记录。`)) {
+      return;
+    }
+
+    try {
+      await finishHabit(habitId);
+      await refreshTodayHabitsData();
+      alert('打卡行为已结束');
+    } catch (err) {
+      alert('结束失败: ' + (err.response?.data?.detail || '未知错误'));
+    }
+  };
+
   // 处理目标完成/取消完成
   const handleGoalToggle = async (goalId) => {
     const goal = goals.find(g => g.id === goalId);
@@ -1079,6 +1456,23 @@ export default function Dashboard({ userConfig, onLogout }) {
     }
   }, [isEditModalOpen, tempEvent]);
 
+  // 日记弹窗打开时，加载当前日期的长期行为打卡历史
+  useEffect(() => {
+    if (!isEditModalOpen || !selectedDate?.dateKey) {
+      setSelectedDateHabitLogs([]);
+      return;
+    }
+
+    setIsLoadingHabitLogs(true);
+    fetchHabitLogsByDate(selectedDate.dateKey)
+      .then(data => setSelectedDateHabitLogs(Array.isArray(data) ? data : []))
+      .catch(err => {
+        console.error('加载指定日期打卡记录失败', err);
+        setSelectedDateHabitLogs([]);
+      })
+      .finally(() => setIsLoadingHabitLogs(false));
+  }, [isEditModalOpen, selectedDate?.dateKey]);
+
   const handleSaveEvent = async () => {
     if (selectedDate) {
       try {
@@ -1090,7 +1484,7 @@ export default function Dashboard({ userConfig, onLogout }) {
         setEvents(updatedData);
         
         setIsEditModalOpen(false);
-      } catch (err) {
+      } catch {
         alert("保存失败，请重试");
       }
     }
@@ -1435,7 +1829,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                       ctx.drawImage(imageElement, imageX, imageY, drawWidth, drawHeight);
 
                       y = imageY + drawHeight + imageBottomGap;
-                  } catch (err) {
+                  } catch {
                       drawParagraph(`图片 ${idx + 1} 预览加载失败：images/${savedImage.name}`, {
                           font: '24px "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif',
                           color: '#6b7280',
@@ -1479,6 +1873,25 @@ export default function Dashboard({ userConfig, onLogout }) {
 
           if (evt.content) {
               mdContent += `## 内容\n\n${evt.content}\n\n`;
+          }
+
+          // 导出即刻行动记录
+          const instantActions = Array.isArray(evt.instantActions) ? evt.instantActions : [];
+          if (instantActions.length > 0) {
+              const sortedActions = [...instantActions].sort((a, b) => {
+                  const aTime = new Date(a?.created_at || 0).getTime();
+                  const bTime = new Date(b?.created_at || 0).getTime();
+                  return aTime - bTime;
+              });
+              mdContent += `## 即刻行动\n\n`;
+              sortedActions.forEach((action) => {
+                  const time = formatTimeLabel(action?.created_at);
+                  const tags = Array.isArray(action?.tags) && action.tags.length > 0
+                      ? ` ${action.tags.map(tag => `#${tag}`).join(' ')}`
+                      : '';
+                  mdContent += `- [${time}] ${action?.content || '（无内容）'}${tags}\n`;
+              });
+              mdContent += `\n`;
           }
 
           // 收集所有图片（优先原图）
@@ -1530,7 +1943,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                           if (response.ok) {
                               imgBlob = await response.blob();
                           }
-                      } catch (e) {
+                      } catch {
                           console.log('外部图片下载失败:', imgUrl);
                       }
                   }
@@ -1674,6 +2087,12 @@ export default function Dashboard({ userConfig, onLogout }) {
                 <span className="text-neutral-400 hidden sm:block">
                     {new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })}
                 </span>
+                <button onClick={() => setIsInstantActionModalOpen(true)} className="hover:text-white flex items-center gap-1 sm:gap-2">
+                  <Zap size={16}/> <span className="hidden sm:inline">即刻行动</span>
+                </button>
+                <button onClick={() => setIsHabitModalOpen(true)} className="hover:text-white flex items-center gap-1 sm:gap-2">
+                  <Plus size={16}/> <span className="hidden sm:inline">新建打卡</span>
+                </button>
                 <button onClick={() => setIsGalleryOpen(true)} className="hover:text-white flex items-center gap-1 sm:gap-2"><LayoutGrid size={16}/> <span className="hidden sm:inline">相册</span></button>
                 <button onClick={() => setIsSpecialDaysModalOpen(true)} className="hover:text-white flex items-center gap-1 sm:gap-2"><Calendar size={16}/> <span className="hidden sm:inline">纪念日</span></button>
                 <button onClick={() => setIsExportModalOpen(true)} className="hover:text-white flex items-center gap-1 sm:gap-2"><Download size={16}/> <span className="hidden sm:inline">导出</span></button>
@@ -2058,6 +2477,164 @@ export default function Dashboard({ userConfig, onLogout }) {
 
             {/* 渚ц竟鏍?*/}
             <div className="lg:col-span-4 space-y-6">
+                 {/* 今日即刻行动 */}
+                 <Card className="p-4 sm:p-5">
+                    <div className="flex items-center justify-between mb-3">
+                        <h3 className="font-bold flex items-center gap-2"><Zap size={18}/> 今日即刻行动</h3>
+                        <span className="text-xs text-neutral-500">{todayInstantActions.length} 条</span>
+                    </div>
+                    {todayInstantActionTags.length > 1 && (
+                        <div className="flex flex-wrap gap-1 mb-3">
+                            {todayInstantActionTags.map(tag => (
+                                <button
+                                    key={tag}
+                                    onClick={() => setTodayInstantTagFilter(tag)}
+                                    className={`px-2 py-1 rounded text-xs border ${
+                                      todayInstantTagFilter === tag
+                                        ? 'bg-white text-black border-white'
+                                        : 'border-neutral-700 text-neutral-300 hover:bg-neutral-800'
+                                    }`}
+                                >
+                                    {tag}
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                    {filteredTodayInstantActions.length === 0 ? (
+                        <div className="rounded-lg border border-dashed border-neutral-700 bg-neutral-900/40 px-3 py-6 text-center text-sm text-neutral-500">
+                            今天还没有即刻行动
+                        </div>
+                    ) : (
+                        <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar">
+                            {filteredTodayInstantActions.map(action => (
+                                <div key={action.id} className="rounded-lg border border-neutral-700 bg-neutral-900/50 p-2">
+                                    <div className="flex items-start gap-2">
+                                        <div className="text-xs text-neutral-400 mt-0.5 shrink-0">{formatTimeLabel(action.created_at)}</div>
+                                        <div className="text-sm text-neutral-100 flex-1">{action.content}</div>
+                                        <button
+                                            onClick={() => handleDeleteInstantAction(todayDateKey, action.id)}
+                                            className="text-neutral-500 hover:text-red-400"
+                                            title="删除"
+                                        >
+                                            <Trash2 size={14}/>
+                                        </button>
+                                    </div>
+                                    {Array.isArray(action.tags) && action.tags.length > 0 && (
+                                        <div className="mt-2 flex flex-wrap gap-1">
+                                            {action.tags.map(tag => (
+                                                <span key={`${action.id}-${tag}`} className="px-2 py-0.5 rounded bg-neutral-800 text-[11px] text-neutral-300">
+                                                    #{tag}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                 </Card>
+
+                 {/* 今日打卡 */}
+                 <Card className="p-4 sm:p-5">
+                    <div className="flex items-center justify-between mb-3">
+                        <h3 className="font-bold flex items-center gap-2"><CheckCircle2 size={18}/> 今日打卡</h3>
+                        <button
+                            onClick={() => setIsHabitModalOpen(true)}
+                            className="text-xs px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700"
+                        >
+                            新建
+                        </button>
+                    </div>
+                    {todayHabits.length === 0 ? (
+                        <div className="rounded-lg border border-dashed border-neutral-700 bg-neutral-900/40 px-3 py-6 text-center text-sm text-neutral-500">
+                            暂无长期行为，先创建一个吧
+                        </div>
+                    ) : (
+                        <div className="space-y-2 max-h-72 overflow-y-auto custom-scrollbar">
+                            {todayHabits.map(habit => (
+                                <div key={habit.id} className="rounded-lg border border-neutral-700 bg-neutral-900/50 p-2">
+                                    <div className="flex items-start justify-between gap-2">
+                                        <div className="min-w-0">
+                                            <div className="text-sm font-medium text-neutral-100 truncate">{habit.name}</div>
+                                            <div className="text-xs text-neutral-400">
+                                                连续 {habit.streak_days || 0} 天 · 累计 {habit.total_completed || 0} 次
+                                            </div>
+                                        </div>
+                                        {habit.today?.completed ? (
+                                            <span className="text-xs px-2 py-0.5 rounded bg-green-500/20 text-green-300 border border-green-500/30">已完成</span>
+                                        ) : (
+                                            <span className="text-xs px-2 py-0.5 rounded bg-neutral-800 text-neutral-400 border border-neutral-700">未完成</span>
+                                        )}
+                                    </div>
+                                    {Array.isArray(habit.tags) && habit.tags.length > 0 && (
+                                        <div className="mt-1 flex flex-wrap gap-1">
+                                            {habit.tags.map(tag => (
+                                                <span key={`${habit.id}-${tag}`} className="px-2 py-0.5 rounded bg-neutral-800 text-[11px] text-neutral-300">#{tag}</span>
+                                            ))}
+                                        </div>
+                                    )}
+
+                                    <div className="mt-2">
+                                        {habit.mode === 'quantity' ? (
+                                            <div className="flex gap-2 items-center">
+                                                <input
+                                                    type="number"
+                                                    min="0"
+                                                    value={habitValueDrafts[habit.id] ?? habit.today?.value ?? ''}
+                                                    onChange={e => setHabitValueDrafts({ ...habitValueDrafts, [habit.id]: e.target.value })}
+                                                    placeholder={`目标 ${habit.target_value ?? '-'} ${habit.unit || ''}`}
+                                                    className="flex-1 bg-black border border-neutral-700 rounded px-2 py-1 text-sm text-white"
+                                                />
+                                                <button
+                                                    onClick={() => handleHabitCheckin(habit)}
+                                                    className="px-3 py-1 rounded bg-white text-black text-sm font-medium hover:bg-neutral-200"
+                                                >
+                                                    提交
+                                                </button>
+                                                {habit.today && (
+                                                    <button
+                                                        onClick={() => handleHabitUndoToday(habit.id)}
+                                                        className="px-2 py-1 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800"
+                                                    >
+                                                        撤销
+                                                    </button>
+                                                )}
+                                            </div>
+                                        ) : (
+                                            <div className="flex gap-2">
+                                                {!habit.today?.completed ? (
+                                                    <button
+                                                        onClick={() => handleHabitCheckin(habit)}
+                                                        className="px-3 py-1 rounded bg-white text-black text-sm font-medium hover:bg-neutral-200"
+                                                    >
+                                                        打卡
+                                                    </button>
+                                                ) : (
+                                                    <button
+                                                        onClick={() => handleHabitUndoToday(habit.id)}
+                                                        className="px-3 py-1 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800"
+                                                    >
+                                                        撤销
+                                                    </button>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                    <div className="mt-2 flex justify-end">
+                                        <button
+                                            onClick={() => handleFinishHabit(habit.id, habit.name)}
+                                            className="px-2 py-1 rounded border border-emerald-700/60 text-xs text-emerald-300 hover:bg-emerald-900/20"
+                                            title="结束该打卡行为（保留历史记录）"
+                                        >
+                                            完成行为
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                 </Card>
+
                  {/* 目标清单 */}
                  <Card>
                     <h3 className="font-bold mb-4 flex items-center gap-2"><Target size={18}/> 目标清单</h3>
@@ -2464,6 +3041,104 @@ export default function Dashboard({ userConfig, onLogout }) {
                 <div className="flex justify-end gap-2 pt-2">
                     <button onClick={handleSaveEvent} className="px-6 py-2 bg-white text-black rounded font-bold hover:bg-neutral-200">保存</button>
                 </div>
+
+                {/* 当日即刻行动记录（自动形成，放在保存按钮下方） */}
+                {selectedDate && (
+                    <div className="bg-neutral-800/40 border border-neutral-700 rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-2">
+                            <div className="text-sm font-medium text-neutral-200 flex items-center gap-2">
+                                <Zap size={14}/> 即刻行动记录
+                            </div>
+                            <span className="text-xs text-neutral-500">{selectedDateInstantActions.length} 条</span>
+                        </div>
+                        {selectedDateInstantActions.length === 0 ? (
+                            <div className="text-sm text-neutral-500">当天暂无即刻行动记录</div>
+                        ) : (
+                            <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar">
+                                {selectedDateInstantActions.map(action => (
+                                    <div key={action.id} className="bg-neutral-900/60 border border-neutral-700 rounded p-2">
+                                        <div className="flex items-start gap-2">
+                                            <div className="text-xs text-neutral-400 mt-0.5">{formatTimeLabel(action.created_at)}</div>
+                                            <div className="text-sm text-neutral-100 flex-1">{action.content}</div>
+                                            <button
+                                                onClick={() => handleDeleteInstantAction(selectedDate.dateKey, action.id)}
+                                                className="text-neutral-500 hover:text-red-400"
+                                                title="删除"
+                                            >
+                                                <Trash2 size={14}/>
+                                            </button>
+                                        </div>
+                                        {Array.isArray(action.tags) && action.tags.length > 0 && (
+                                            <div className="mt-1 flex flex-wrap gap-1">
+                                                {action.tags.map(tag => (
+                                                    <span key={`${action.id}-${tag}`} className="px-2 py-0.5 rounded bg-neutral-800 text-[11px] text-neutral-300">
+                                                        #{tag}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* 当日长期行为打卡记录（自动形成，放在保存按钮下方） */}
+                {selectedDate && (
+                    <div className="bg-neutral-800/40 border border-neutral-700 rounded-lg p-3">
+                        <div className="flex items-center justify-between mb-2">
+                            <div className="text-sm font-medium text-neutral-200 flex items-center gap-2">
+                                <CheckCircle2 size={14}/> 今日打卡记录
+                            </div>
+                            <span className="text-xs text-neutral-500">{selectedDateHabitLogs.length} 条</span>
+                        </div>
+                        {isLoadingHabitLogs ? (
+                            <div className="text-sm text-neutral-500">加载中...</div>
+                        ) : selectedDateHabitLogs.length === 0 ? (
+                            <div className="text-sm text-neutral-500">当天暂无打卡记录</div>
+                        ) : (
+                            <div className="space-y-2 max-h-44 overflow-y-auto custom-scrollbar">
+                                {selectedDateHabitLogs.map(log => (
+                                    <div key={log.id} className="bg-neutral-900/60 border border-neutral-700 rounded p-2">
+                                        <div className="flex items-start gap-2">
+                                            <div className="text-xs text-neutral-400 mt-0.5">{formatTimeLabel(log.created_at)}</div>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="text-sm text-neutral-100 truncate">
+                                                    {log.habit_name || `行为 #${log.habit_id}`}
+                                                    <span className="ml-2 text-xs text-neutral-400">
+                                                        {log.completed ? '已完成' : '未完成'}
+                                                    </span>
+                                                </div>
+                                                {(log.value !== null && log.value !== undefined) && (
+                                                    <div className="text-xs text-neutral-400 mt-0.5">
+                                                        数值：{log.value}{log.habit_unit ? ` ${log.habit_unit}` : ''}
+                                                    </div>
+                                                )}
+                                                {Array.isArray(log.habit_tags) && log.habit_tags.length > 0 && (
+                                                    <div className="mt-1 flex flex-wrap gap-1">
+                                                        {log.habit_tags.map(tag => (
+                                                            <span key={`${log.id}-${tag}`} className="px-2 py-0.5 rounded bg-neutral-800 text-[11px] text-neutral-300">
+                                                                #{tag}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <button
+                                                onClick={() => handleDeleteHabitLogInDiary(log.habit_id, selectedDate.dateKey)}
+                                                className="text-neutral-500 hover:text-red-400"
+                                                title="删除"
+                                            >
+                                                <Trash2 size={14}/>
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
             </div>
         </Modal>
         
@@ -2529,6 +3204,259 @@ export default function Dashboard({ userConfig, onLogout }) {
                  <input type="password" placeholder="密码" required value={newUserForm.password} onChange={e=>setNewUserForm({...newUserForm, password:e.target.value})} className="w-full bg-black border border-neutral-700 p-2 rounded text-white"/>
                  <button type="submit" className="w-full bg-white text-black p-2 rounded font-bold">创建</button>
              </form>
+        </Modal>
+
+        {/* 弹窗：即刻行动快速记录 */}
+        <Modal isOpen={isInstantActionModalOpen} onClose={() => setIsInstantActionModalOpen(false)} title="⚡ 记录即刻行动">
+            <div className="space-y-4">
+                <div>
+                    <label className="block text-sm text-neutral-400 mb-1">内容</label>
+                    <textarea
+                        value={instantActionForm.content}
+                        onChange={e => setInstantActionForm({ ...instantActionForm, content: e.target.value })}
+                        placeholder="现在立刻做了什么？"
+                        className="w-full min-h-24 bg-black border border-neutral-700 p-3 rounded text-white resize-y"
+                    />
+                </div>
+
+                <div>
+                    <label className="block text-sm text-neutral-400 mb-1">快捷标签</label>
+                    <div className="flex flex-wrap gap-2">
+                        {quickInstantTags.map(tag => (
+                            <button
+                                key={tag}
+                                onClick={() => addInstantTag(tag)}
+                                className="px-2 py-1 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800"
+                            >
+                                {tag}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                <div>
+                    <label className="block text-sm text-neutral-400 mb-1">自定义标签</label>
+                    <input
+                        value={instantActionForm.tagInput}
+                        onChange={e => setInstantActionForm({ ...instantActionForm, tagInput: e.target.value })}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            addInstantTag(instantActionForm.tagInput);
+                          }
+                        }}
+                        placeholder="输入后回车添加"
+                        className="w-full bg-black border border-neutral-700 p-2 rounded text-white text-sm"
+                    />
+                </div>
+
+                {instantActionForm.tags.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                        {instantActionForm.tags.map(tag => (
+                            <button
+                                key={tag}
+                                onClick={() => removeInstantTag(tag)}
+                                className="px-2 py-1 rounded bg-neutral-800 text-xs text-neutral-200 hover:bg-neutral-700"
+                            >
+                                #{tag} ×
+                            </button>
+                        ))}
+                    </div>
+                )}
+
+                <div className="flex justify-end gap-2 pt-2">
+                    <button onClick={() => setIsInstantActionModalOpen(false)} className="px-4 py-2 border border-neutral-700 rounded text-sm hover:bg-neutral-800">
+                        取消
+                    </button>
+                    <button
+                        onClick={handleSaveInstantAction}
+                        disabled={isSavingInstantAction}
+                        className="px-4 py-2 bg-white text-black rounded text-sm font-bold hover:bg-neutral-200 disabled:opacity-50"
+                    >
+                        {isSavingInstantAction ? '保存中...' : '保存并记录'}
+                    </button>
+                </div>
+            </div>
+        </Modal>
+
+        {/* 弹窗：新建长期行为 */}
+        <Modal isOpen={isHabitModalOpen} onClose={() => setIsHabitModalOpen(false)} title="新建长期行为" maxWidth="max-w-2xl">
+            <div className="space-y-4">
+                <div>
+                    <label className="block text-sm text-neutral-400 mb-1">行为名称</label>
+                    <input
+                        value={habitForm.name}
+                        onChange={e => setHabitForm({ ...habitForm, name: e.target.value })}
+                        placeholder="例如：晨跑、读书"
+                        className="w-full bg-black border border-neutral-700 p-2 rounded text-white"
+                    />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label className="block text-sm text-neutral-400 mb-1">行为类型</label>
+                        <select
+                            value={habitForm.mode}
+                            onChange={e => setHabitForm({ ...habitForm, mode: e.target.value })}
+                            className="w-full bg-black border border-neutral-700 p-2 rounded text-white"
+                        >
+                            <option value="binary">完成型（做/没做）</option>
+                            <option value="quantity">计量型（数值）</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label className="block text-sm text-neutral-400 mb-1">频率</label>
+                        <select
+                            value={habitForm.frequencyType}
+                            onChange={e => setHabitForm({ ...habitForm, frequencyType: e.target.value })}
+                            className="w-full bg-black border border-neutral-700 p-2 rounded text-white"
+                        >
+                            <option value="daily">每天</option>
+                            <option value="weekly_n">每周 N 次</option>
+                            <option value="weekly_days">固定星期几</option>
+                        </select>
+                    </div>
+                </div>
+
+                {habitForm.frequencyType === 'weekly_n' && (
+                    <div>
+                        <label className="block text-sm text-neutral-400 mb-1">每周次数（1-7）</label>
+                        <input
+                            type="number"
+                            min="1"
+                            max="7"
+                            value={habitForm.frequencyTimes}
+                            onChange={e => setHabitForm({ ...habitForm, frequencyTimes: e.target.value })}
+                            className="w-full bg-black border border-neutral-700 p-2 rounded text-white"
+                        />
+                    </div>
+                )}
+
+                {habitForm.frequencyType === 'weekly_days' && (
+                    <div>
+                        <label className="block text-sm text-neutral-400 mb-1">选择星期</label>
+                        <div className="flex flex-wrap gap-2">
+                            {weekDayOptions.map(day => (
+                                <button
+                                    key={day.value}
+                                    onClick={() => toggleHabitWeekDay(day.value)}
+                                    className={`px-3 py-1 rounded border text-sm ${
+                                      habitForm.weeklyDays.includes(day.value)
+                                        ? 'bg-white text-black border-white'
+                                        : 'border-neutral-700 text-neutral-300 hover:bg-neutral-800'
+                                    }`}
+                                >
+                                    周{day.label}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
+
+                {habitForm.mode === 'quantity' && (
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className="block text-sm text-neutral-400 mb-1">目标值</label>
+                            <input
+                                type="number"
+                                min="1"
+                                value={habitForm.targetValue}
+                                onChange={e => setHabitForm({ ...habitForm, targetValue: e.target.value })}
+                                className="w-full bg-black border border-neutral-700 p-2 rounded text-white"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm text-neutral-400 mb-1">单位</label>
+                            <input
+                                value={habitForm.unit}
+                                onChange={e => setHabitForm({ ...habitForm, unit: e.target.value })}
+                                placeholder="分钟/页/次"
+                                className="w-full bg-black border border-neutral-700 p-2 rounded text-white"
+                            />
+                        </div>
+                    </div>
+                )}
+
+                <div>
+                    <label className="block text-sm text-neutral-400 mb-1">快捷标签</label>
+                    <div className="flex flex-wrap gap-2">
+                        {quickHabitTags.map(tag => (
+                            <button
+                                key={tag}
+                                onClick={() => addHabitTag(tag)}
+                                className="px-2 py-1 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800"
+                            >
+                                {tag}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                <div>
+                    <label className="block text-sm text-neutral-400 mb-1">自定义标签</label>
+                    <input
+                        value={habitForm.tagInput}
+                        onChange={e => setHabitForm({ ...habitForm, tagInput: e.target.value })}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            addHabitTag(habitForm.tagInput);
+                          }
+                        }}
+                        placeholder="输入后回车添加"
+                        className="w-full bg-black border border-neutral-700 p-2 rounded text-white text-sm"
+                    />
+                </div>
+
+                {habitForm.tags.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                        {habitForm.tags.map(tag => (
+                            <button
+                                key={tag}
+                                onClick={() => removeHabitTag(tag)}
+                                className="px-2 py-1 rounded bg-neutral-800 text-xs text-neutral-200 hover:bg-neutral-700"
+                            >
+                                #{tag} ×
+                            </button>
+                        ))}
+                    </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-3">
+                    <div>
+                        <label className="block text-sm text-neutral-400 mb-1">开始日期</label>
+                        <input
+                            type="date"
+                            value={habitForm.startDate}
+                            onChange={e => setHabitForm({ ...habitForm, startDate: e.target.value })}
+                            className="w-full bg-black border border-neutral-700 p-2 rounded text-white"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm text-neutral-400 mb-1">提醒时间（可选）</label>
+                        <input
+                            type="time"
+                            value={habitForm.reminderTime}
+                            onChange={e => setHabitForm({ ...habitForm, reminderTime: e.target.value })}
+                            className="w-full bg-black border border-neutral-700 p-2 rounded text-white"
+                        />
+                    </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2">
+                    <button onClick={() => setIsHabitModalOpen(false)} className="px-4 py-2 border border-neutral-700 rounded text-sm hover:bg-neutral-800">
+                        取消
+                    </button>
+                    <button
+                        onClick={handleCreateHabit}
+                        disabled={isCreatingHabit}
+                        className="px-4 py-2 bg-white text-black rounded text-sm font-bold hover:bg-neutral-200 disabled:opacity-50"
+                    >
+                        {isCreatingHabit ? '创建中...' : '创建行为'}
+                    </button>
+                </div>
+            </div>
         </Modal>
 
         {/* 寮圭獥锛氱敤鎴疯祫鏂欑紪杈?*/}

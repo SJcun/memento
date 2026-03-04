@@ -100,6 +100,9 @@ def ensure_schema_compatibility():
     if "city" not in event_columns:
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE events ADD COLUMN city VARCHAR"))
+    if "instant_actions" not in event_columns:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE events ADD COLUMN instant_actions TEXT"))
 
 
 def drop_tables():

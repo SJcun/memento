@@ -3,7 +3,9 @@ API路由模块
 定义所有FastAPI路由端点和请求处理函数
 """
 
-from datetime import date, datetime
+import json
+import uuid
+from datetime import date, datetime, timedelta
 from typing import Dict, Any, List, Optional
 
 from fastapi import APIRouter, Depends, Form, UploadFile, File, HTTPException, status
@@ -12,7 +14,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from config import settings
 from database import get_db
-from models import User, Event, Goal, SpecialDay
+from models import User, Event, Goal, SpecialDay, Habit, HabitLog
 from auth import (
     authenticate_user,
     create_access_token,
@@ -24,6 +26,224 @@ from utils import process_image, validate_image_size, extract_city_from_image
 
 # 创建API路由组
 router = APIRouter(tags=["api"])
+
+
+def _parse_date(date_str: str, *, field: str = "date") -> date:
+    """解析 YYYY-MM-DD 日期字符串。"""
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field} 格式无效，请使用 YYYY-MM-DD"
+        )
+
+
+def _json_list(raw: Optional[str]) -> List[Any]:
+    """将 JSON 数组字符串安全解析为列表。"""
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, list) else []
+    except Exception:
+        return []
+
+
+def _normalize_tags(tags: Optional[List[str]], *, max_count: int = 5, max_length: int = 12) -> List[str]:
+    """规范化标签：去重、去空、限制长度和数量。"""
+    if tags is None:
+        return []
+    normalized = []
+    seen = set()
+    for tag in tags:
+        if not isinstance(tag, str):
+            continue
+        cleaned = tag.strip()
+        if not cleaned:
+            continue
+        if len(cleaned) > max_length:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"标签长度不能超过 {max_length} 个字符"
+            )
+        lowered = cleaned.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        normalized.append(cleaned)
+    if len(normalized) > max_count:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"标签最多 {max_count} 个"
+        )
+    return normalized
+
+
+def _serialize_habit(habit: Habit) -> Dict[str, Any]:
+    """序列化 Habit 模型为 API 响应。"""
+    frequency_value = None
+    if habit.frequency_value:
+        try:
+            frequency_value = json.loads(habit.frequency_value)
+        except Exception:
+            frequency_value = None
+
+    return {
+        "id": habit.id,
+        "name": habit.name,
+        "mode": habit.mode,
+        "frequency_type": habit.frequency_type,
+        "frequency_value": frequency_value,
+        "target_value": habit.target_value,
+        "unit": habit.unit,
+        "tags": _json_list(habit.tags),
+        "start_date": habit.start_date.isoformat() if habit.start_date else None,
+        "reminder_time": habit.reminder_time,
+        "is_active": habit.is_active,
+        "created_at": habit.created_at.isoformat() if habit.created_at else None,
+    }
+
+
+def _serialize_habit_log(log: HabitLog, habit: Optional[Habit] = None) -> Dict[str, Any]:
+    """序列化 HabitLog 模型为 API 响应。"""
+    result = {
+        "id": log.id,
+        "habit_id": log.habit_id,
+        "log_date": log.log_date.isoformat() if log.log_date else None,
+        "value": log.value,
+        "completed": log.completed,
+        "note": log.note,
+        "created_at": log.created_at.isoformat() if log.created_at else None,
+    }
+    if habit is not None:
+        result.update({
+            "habit_name": habit.name,
+            "habit_mode": habit.mode,
+            "habit_unit": habit.unit,
+            "habit_tags": _json_list(habit.tags),
+        })
+    return result
+
+
+def _weekly_range(day: date) -> (date, date):
+    """返回给定日期所在周（一到日）的起止日期。"""
+    week_start = day - timedelta(days=day.weekday())
+    week_end = week_start + timedelta(days=6)
+    return week_start, week_end
+
+
+def _is_habit_due_on_date(habit: Habit, check_date: date, db: Session) -> bool:
+    """判断某个行为在指定日期是否应打卡。"""
+    if not habit.is_active:
+        return False
+    if habit.start_date and check_date < habit.start_date:
+        return False
+
+    frequency_type = habit.frequency_type or "daily"
+    frequency_value = None
+    if habit.frequency_value:
+        try:
+            frequency_value = json.loads(habit.frequency_value)
+        except Exception:
+            frequency_value = None
+
+    if frequency_type == "daily":
+        return True
+
+    if frequency_type == "weekly_days":
+        if isinstance(frequency_value, list):
+            try:
+                selected_days = {int(d) for d in frequency_value}
+            except Exception:
+                selected_days = set()
+            return check_date.weekday() in selected_days
+        return False
+
+    if frequency_type == "weekly_n":
+        times = 1
+        if isinstance(frequency_value, dict):
+            try:
+                times = int(frequency_value.get("times", 1))
+            except Exception:
+                times = 1
+        times = max(1, min(7, times))
+
+        week_start, week_end = _weekly_range(check_date)
+        completed_count = db.query(HabitLog).filter(
+            HabitLog.habit_id == habit.id,
+            HabitLog.log_date >= week_start,
+            HabitLog.log_date <= week_end,
+            HabitLog.completed == True,  # noqa: E712
+        ).count()
+        return completed_count < times
+
+    # 未识别频率类型，默认按每日
+    return True
+
+
+def _compute_habit_streak(completed_dates: List[date]) -> int:
+    """计算按自然日连续完成天数。"""
+    if not completed_dates:
+        return 0
+    completed_set = set(completed_dates)
+    cursor = date.today()
+    if cursor not in completed_set:
+        cursor = cursor - timedelta(days=1)
+
+    streak = 0
+    while cursor in completed_set:
+        streak += 1
+        cursor -= timedelta(days=1)
+    return streak
+
+
+def _normalize_frequency(frequency_type: str, frequency_value: Any) -> Optional[str]:
+    """规范化频率并序列化为 JSON 字符串。"""
+    if frequency_type == "daily":
+        return None
+
+    if frequency_type == "weekly_n":
+        try:
+            if isinstance(frequency_value, dict):
+                times = int(frequency_value.get("times", 1))
+            else:
+                times = int(frequency_value)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="weekly_n 模式的 frequency_value 必须是 1-7 的整数"
+            )
+        times = max(1, min(7, times))
+        return json.dumps({"times": times}, ensure_ascii=False)
+
+    if frequency_type == "weekly_days":
+        days = frequency_value
+        if isinstance(days, dict):
+            days = days.get("days")
+        if not isinstance(days, list) or not days:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="weekly_days 模式的 frequency_value 必须是非空数组"
+            )
+        try:
+            normalized_days = sorted({int(d) for d in days})
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="weekly_days 的取值必须是 0-6 的数字数组"
+            )
+        if any(d < 0 or d > 6 for d in normalized_days):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="weekly_days 的取值范围必须是 0-6（周一到周日）"
+            )
+        return json.dumps(normalized_days, ensure_ascii=False)
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="frequency_type 仅支持 daily / weekly_n / weekly_days"
+    )
 
 
 @router.post("/token")
@@ -148,8 +368,6 @@ async def get_events(
     result = {}
     for event in events:
         key = event.entry_date.isoformat()
-        # 解析图片路径（支持多张图片，JSON数组或单个字符串）
-        import json
 
         # 处理缩略图
         thumbnail_paths = []
@@ -171,6 +389,15 @@ async def get_events(
             except:
                 original_paths = [event.image_original]
 
+        instant_actions = []
+        if event.instant_actions:
+            try:
+                parsed_actions = json.loads(event.instant_actions)
+                if isinstance(parsed_actions, list):
+                    instant_actions = parsed_actions
+            except Exception:
+                instant_actions = []
+
         # 返回第一张缩略图作为主图（向后兼容），同时返回所有图片
         result[key] = {
             "id": event.id,
@@ -183,6 +410,7 @@ async def get_events(
             "imageOriginal": original_paths[0] if original_paths else None,  # 第一张原图（向后兼容）
             "images": thumbnail_paths,  # 所有缩略图
             "imagesOriginal": original_paths,  # 所有原图
+            "instantActions": instant_actions,  # 当日即刻行动记录
         }
 
     return result
@@ -247,8 +475,6 @@ async def save_event(
     event.updated_at = date.today()
 
     # 处理图片上传（支持多张图片）
-    import json
-
     all_images = []
     if images:  # 多张图片
         all_images = images
@@ -323,6 +549,108 @@ async def save_event(
     db.commit()
 
     return {"msg": "事件保存成功", "city": event.city}
+
+
+class InstantActionCreate(BaseModel):
+    content: str
+    tags: List[str] = []
+
+
+@router.post("/events/{entry_date}/instant-actions")
+async def create_instant_action(
+    entry_date: str,
+    payload: InstantActionCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """为指定日期添加一条即刻行动记录。"""
+    target_date = _parse_date(entry_date, field="entry_date")
+    if target_date > date.today():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="不能在未来日期创建即刻行动"
+        )
+
+    content = (payload.content or "").strip()
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="即刻行动内容不能为空"
+        )
+    if len(content) > 200:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="即刻行动内容不能超过200个字符"
+        )
+
+    tags = _normalize_tags(payload.tags)
+
+    event = db.query(Event).filter(
+        Event.user_id == current_user.id,
+        Event.entry_date == target_date,
+    ).first()
+    if not event:
+        event = Event(
+            user_id=current_user.id,
+            entry_date=target_date,
+            mood="neutral",
+        )
+        db.add(event)
+        db.flush()
+
+    instant_actions = _json_list(event.instant_actions)
+    new_item = {
+        "id": f"ia_{uuid.uuid4().hex[:8]}",
+        "content": content,
+        "tags": tags,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    instant_actions.append(new_item)
+
+    event.instant_actions = json.dumps(instant_actions, ensure_ascii=False)
+    event.updated_at = date.today()
+    db.commit()
+
+    return {"msg": "instant action saved", "item": new_item}
+
+
+@router.delete("/events/{entry_date}/instant-actions/{action_id}")
+async def delete_instant_action(
+    entry_date: str,
+    action_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """删除指定日期的一条即刻行动记录。"""
+    target_date = _parse_date(entry_date, field="entry_date")
+
+    event = db.query(Event).filter(
+        Event.user_id == current_user.id,
+        Event.entry_date == target_date,
+    ).first()
+    if not event:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="该日期没有可删除的即刻行动记录"
+        )
+
+    instant_actions = _json_list(event.instant_actions)
+    remaining_actions = [
+        item for item in instant_actions
+        if not (isinstance(item, dict) and item.get("id") == action_id)
+    ]
+
+    if len(remaining_actions) == len(instant_actions):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="即刻行动记录不存在"
+        )
+
+    event.instant_actions = json.dumps(remaining_actions, ensure_ascii=False) if remaining_actions else None
+    event.updated_at = date.today()
+    db.commit()
+
+    return {"msg": "instant action deleted"}
 
 
 @router.get("/health")
@@ -796,6 +1124,409 @@ async def delete_goal(
     db.commit()
 
     return {"msg": "目标删除成功"}
+
+
+class HabitCreate(BaseModel):
+    name: str
+    mode: str = "binary"
+    frequency_type: str = "daily"
+    frequency_value: Optional[Any] = None
+    target_value: Optional[int] = None
+    unit: Optional[str] = None
+    tags: List[str] = []
+    start_date: Optional[str] = None
+    reminder_time: Optional[str] = None
+
+
+class HabitUpdate(BaseModel):
+    name: Optional[str] = None
+    mode: Optional[str] = None
+    frequency_type: Optional[str] = None
+    frequency_value: Optional[Any] = None
+    target_value: Optional[int] = None
+    unit: Optional[str] = None
+    tags: Optional[List[str]] = None
+    start_date: Optional[str] = None
+    reminder_time: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class HabitLogUpsert(BaseModel):
+    log_date: Optional[str] = None
+    value: Optional[int] = None
+    completed: Optional[bool] = None
+    note: Optional[str] = None
+
+
+@router.post("/habits")
+async def create_habit(
+    payload: HabitCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """创建长期行为。"""
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="行为名称不能为空")
+    if len(name) > 60:
+        raise HTTPException(status_code=400, detail="行为名称不能超过60个字符")
+
+    mode = (payload.mode or "binary").strip().lower()
+    if mode not in {"binary", "quantity"}:
+        raise HTTPException(status_code=400, detail="mode 仅支持 binary / quantity")
+
+    frequency_type = (payload.frequency_type or "daily").strip().lower()
+    frequency_value = _normalize_frequency(frequency_type, payload.frequency_value)
+
+    tags = _normalize_tags(payload.tags)
+    start_date = _parse_date(payload.start_date, field="start_date") if payload.start_date else date.today()
+
+    target_value = payload.target_value
+    unit = (payload.unit or "").strip() or None
+    if mode == "quantity":
+        if target_value is None or target_value <= 0:
+            raise HTTPException(status_code=400, detail="计量型行为必须设置大于0的目标值")
+        if not unit:
+            raise HTTPException(status_code=400, detail="计量型行为必须设置单位")
+    else:
+        target_value = None
+        unit = None
+
+    habit = Habit(
+        user_id=current_user.id,
+        name=name,
+        mode=mode,
+        frequency_type=frequency_type,
+        frequency_value=frequency_value,
+        target_value=target_value,
+        unit=unit,
+        tags=json.dumps(tags, ensure_ascii=False),
+        start_date=start_date,
+        reminder_time=(payload.reminder_time or "").strip() or None,
+        is_active=True,
+        created_at=date.today(),
+    )
+    db.add(habit)
+    db.commit()
+    db.refresh(habit)
+
+    return _serialize_habit(habit)
+
+
+@router.get("/habits")
+async def get_habits(
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取当前用户的长期行为列表。"""
+    query = db.query(Habit).filter(Habit.user_id == current_user.id)
+    if not include_inactive:
+        query = query.filter(Habit.is_active == True)  # noqa: E712
+    habits = query.order_by(Habit.created_at.desc(), Habit.id.desc()).all()
+    return [_serialize_habit(habit) for habit in habits]
+
+
+@router.put("/habits/{habit_id}")
+async def update_habit(
+    habit_id: int,
+    payload: HabitUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """更新长期行为配置。"""
+    habit = db.query(Habit).filter(
+        Habit.id == habit_id,
+        Habit.user_id == current_user.id,
+    ).first()
+    if not habit:
+        raise HTTPException(status_code=404, detail="行为不存在")
+
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="行为名称不能为空")
+        if len(name) > 60:
+            raise HTTPException(status_code=400, detail="行为名称不能超过60个字符")
+        habit.name = name
+
+    if payload.mode is not None:
+        mode = payload.mode.strip().lower()
+        if mode not in {"binary", "quantity"}:
+            raise HTTPException(status_code=400, detail="mode 仅支持 binary / quantity")
+        habit.mode = mode
+
+    if payload.frequency_type is not None or payload.frequency_value is not None:
+        new_frequency_type = (payload.frequency_type or habit.frequency_type or "daily").strip().lower()
+        existing_frequency_value = None
+        if habit.frequency_value:
+            try:
+                existing_frequency_value = json.loads(habit.frequency_value)
+            except Exception:
+                existing_frequency_value = None
+        new_frequency_value_input = payload.frequency_value if payload.frequency_value is not None else existing_frequency_value
+        habit.frequency_type = new_frequency_type
+        habit.frequency_value = _normalize_frequency(new_frequency_type, new_frequency_value_input)
+
+    if payload.target_value is not None:
+        if payload.target_value <= 0:
+            raise HTTPException(status_code=400, detail="目标值必须大于0")
+        habit.target_value = payload.target_value
+
+    if payload.unit is not None:
+        habit.unit = payload.unit.strip() or None
+
+    if payload.tags is not None:
+        habit.tags = json.dumps(_normalize_tags(payload.tags), ensure_ascii=False)
+
+    if payload.start_date is not None:
+        habit.start_date = _parse_date(payload.start_date, field="start_date")
+
+    if payload.reminder_time is not None:
+        habit.reminder_time = payload.reminder_time.strip() or None
+
+    if payload.is_active is not None:
+        habit.is_active = payload.is_active
+
+    if habit.mode == "quantity":
+        if not habit.target_value or habit.target_value <= 0:
+            raise HTTPException(status_code=400, detail="计量型行为必须设置目标值")
+        if not habit.unit:
+            raise HTTPException(status_code=400, detail="计量型行为必须设置单位")
+    else:
+        habit.target_value = None
+        habit.unit = None
+
+    db.commit()
+    db.refresh(habit)
+    return _serialize_habit(habit)
+
+
+@router.delete("/habits/{habit_id}")
+async def delete_habit(
+    habit_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """停用长期行为（软删除）。"""
+    habit = db.query(Habit).filter(
+        Habit.id == habit_id,
+        Habit.user_id == current_user.id,
+    ).first()
+    if not habit:
+        raise HTTPException(status_code=404, detail="行为不存在")
+
+    habit.is_active = False
+    db.commit()
+    return {"msg": "habit deactivated"}
+
+
+@router.post("/habits/{habit_id}/logs")
+async def upsert_habit_log(
+    habit_id: int,
+    payload: HabitLogUpsert,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """新增或更新某个行为在某天的打卡记录。"""
+    habit = db.query(Habit).filter(
+        Habit.id == habit_id,
+        Habit.user_id == current_user.id,
+        Habit.is_active == True,  # noqa: E712
+    ).first()
+    if not habit:
+        raise HTTPException(status_code=404, detail="行为不存在或已停用")
+
+    log_date = _parse_date(payload.log_date, field="log_date") if payload.log_date else date.today()
+    if log_date > date.today():
+        raise HTTPException(status_code=400, detail="不能记录未来日期的打卡")
+    if habit.start_date and log_date < habit.start_date:
+        raise HTTPException(status_code=400, detail="不能记录开始日期之前的打卡")
+
+    if payload.value is not None and payload.value < 0:
+        raise HTTPException(status_code=400, detail="打卡数值不能为负数")
+
+    log = db.query(HabitLog).filter(
+        HabitLog.habit_id == habit.id,
+        HabitLog.log_date == log_date,
+    ).first()
+
+    value = payload.value if payload.value is not None else (log.value if log else None)
+
+    if habit.mode == "binary":
+        completed = payload.completed if payload.completed is not None else True
+    else:
+        if value is None:
+            raise HTTPException(status_code=400, detail="计量型行为必须提供数值")
+        target = habit.target_value or 0
+        completed = payload.completed if payload.completed is not None else (value >= target if target > 0 else value > 0)
+
+    note = payload.note.strip() if isinstance(payload.note, str) else payload.note
+
+    if not log:
+        log = HabitLog(
+            habit_id=habit.id,
+            user_id=current_user.id,
+            log_date=log_date,
+            value=value,
+            completed=bool(completed),
+            note=note,
+            created_at=datetime.utcnow(),
+        )
+        db.add(log)
+    else:
+        log.value = value
+        log.completed = bool(completed)
+        log.note = note
+
+    db.commit()
+    db.refresh(log)
+    return _serialize_habit_log(log, habit)
+
+
+@router.delete("/habits/{habit_id}/logs/{log_date}")
+async def delete_habit_log(
+    habit_id: int,
+    log_date: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """删除某个行为在指定日期的打卡记录。"""
+    target_date = _parse_date(log_date, field="log_date")
+
+    habit = db.query(Habit).filter(
+        Habit.id == habit_id,
+        Habit.user_id == current_user.id,
+    ).first()
+    if not habit:
+        raise HTTPException(status_code=404, detail="行为不存在")
+
+    log = db.query(HabitLog).filter(
+        HabitLog.habit_id == habit.id,
+        HabitLog.log_date == target_date,
+    ).first()
+    if not log:
+        raise HTTPException(status_code=404, detail="打卡记录不存在")
+
+    db.delete(log)
+    db.commit()
+    return {"msg": "habit log deleted"}
+
+
+@router.get("/habits/today")
+async def get_today_habits(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取今日长期行为打卡状态。"""
+    today = date.today()
+    habits = db.query(Habit).filter(
+        Habit.user_id == current_user.id,
+        Habit.is_active == True,  # noqa: E712
+    ).order_by(Habit.created_at.desc(), Habit.id.desc()).all()
+
+    today_logs = db.query(HabitLog).filter(
+        HabitLog.user_id == current_user.id,
+        HabitLog.log_date == today,
+    ).all()
+    today_log_map = {log.habit_id: log for log in today_logs}
+
+    result = []
+    for habit in habits:
+        due_today = _is_habit_due_on_date(habit, today, db)
+        today_log = today_log_map.get(habit.id)
+
+        # 如果今天无需打卡且没有今日日志，则不出现在今日卡片中
+        if not due_today and not today_log:
+            continue
+
+        completed_logs = db.query(HabitLog).filter(
+            HabitLog.habit_id == habit.id,
+            HabitLog.completed == True,  # noqa: E712
+        ).order_by(HabitLog.log_date.asc()).all()
+        completed_dates = [log.log_date for log in completed_logs]
+
+        item = _serialize_habit(habit)
+        item.update({
+            "due_today": due_today,
+            "today": _serialize_habit_log(today_log, habit) if today_log else None,
+            "streak_days": _compute_habit_streak(completed_dates),
+            "total_completed": len(completed_dates),
+        })
+        result.append(item)
+
+    return result
+
+
+@router.get("/habits/logs/{log_date}")
+async def get_habit_logs_by_date(
+    log_date: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取指定日期的打卡日志（用于日记页面展示）。"""
+    target_date = _parse_date(log_date, field="log_date")
+
+    logs = db.query(HabitLog).filter(
+        HabitLog.user_id == current_user.id,
+        HabitLog.log_date == target_date,
+    ).order_by(HabitLog.created_at.desc()).all()
+
+    if not logs:
+        return []
+
+    habit_ids = {log.habit_id for log in logs}
+    habits = db.query(Habit).filter(Habit.id.in_(habit_ids)).all()
+    habit_map = {habit.id: habit for habit in habits}
+
+    return [_serialize_habit_log(log, habit_map.get(log.habit_id)) for log in logs]
+
+
+@router.get("/habits/{habit_id}/stats")
+async def get_habit_stats(
+    habit_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """获取单个长期行为的统计信息。"""
+    habit = db.query(Habit).filter(
+        Habit.id == habit_id,
+        Habit.user_id == current_user.id,
+    ).first()
+    if not habit:
+        raise HTTPException(status_code=404, detail="行为不存在")
+
+    completed_logs = db.query(HabitLog).filter(
+        HabitLog.habit_id == habit.id,
+        HabitLog.completed == True,  # noqa: E712
+    ).order_by(HabitLog.log_date.asc()).all()
+    completed_dates = [log.log_date for log in completed_logs]
+
+    today = date.today()
+    range_start = today - timedelta(days=29)
+    recent_logs = db.query(HabitLog).filter(
+        HabitLog.habit_id == habit.id,
+        HabitLog.log_date >= range_start,
+        HabitLog.log_date <= today,
+    ).all()
+    recent_map = {log.log_date: log for log in recent_logs}
+
+    recent_30_days = []
+    for i in range(30):
+        day = range_start + timedelta(days=i)
+        log = recent_map.get(day)
+        recent_30_days.append({
+            "date": day.isoformat(),
+            "completed": bool(log.completed) if log else False,
+            "value": log.value if log else None,
+        })
+
+    return {
+        "habit": _serialize_habit(habit),
+        "streak_days": _compute_habit_streak(completed_dates),
+        "total_completed": len(completed_dates),
+        "recent_30_days": recent_30_days,
+    }
 
 
 # --- 密码修改接口 ---

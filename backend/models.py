@@ -3,8 +3,8 @@
 包含所有SQLAlchemy ORM模型类
 """
 
-from datetime import date
-from sqlalchemy import Column, Integer, String, Text, Boolean, Date, ForeignKey, UniqueConstraint
+from datetime import date, datetime
+from sqlalchemy import Column, Integer, String, Text, Boolean, Date, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 
 # 创建声明性基类
@@ -72,6 +72,7 @@ class Event(Base):
     image_original = Column(Text, nullable=True, comment="原始图片路径数组（JSON格式）")
     image_thumbnail = Column(Text, nullable=True, comment="缩略图路径数组（JSON格式）")
     city = Column(String, nullable=True, comment="拍摄城市（自动识别，测试版）")
+    instant_actions = Column(Text, nullable=True, comment="即刻行动记录数组（JSON格式）")
 
     # 时间戳
     updated_at = Column(Date, default=date.today, comment="最后更新时间")
@@ -147,3 +148,57 @@ class SpecialDay(Base):
 
     def __repr__(self):
         return f"<SpecialDay(id={self.id}, user_id={self.user_id}, title='{self.title}', date='{self.date}')>"
+
+
+class Habit(Base):
+    """
+    长期行为模型
+    存储用户自定义的长期打卡行为配置
+    """
+
+    __tablename__ = "habits"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
+    name = Column(String, nullable=False, comment="行为名称")
+    mode = Column(String, nullable=False, default="binary", comment="类型: binary(完成型) / quantity(计量型)")
+    frequency_type = Column(String, nullable=False, default="daily", comment="频率: daily / weekly_n / weekly_days")
+    frequency_value = Column(Text, nullable=True, comment="频率参数(JSON)")
+    target_value = Column(Integer, nullable=True, comment="目标值（计量型）")
+    unit = Column(String, nullable=True, comment="单位")
+    tags = Column(Text, nullable=True, comment="标签数组(JSON)")
+
+    start_date = Column(Date, default=date.today, nullable=False, comment="开始日期")
+    reminder_time = Column(String, nullable=True, comment="提醒时间(HH:mm)")
+    is_active = Column(Boolean, default=True, comment="是否启用")
+
+    created_at = Column(Date, default=date.today, comment="创建时间")
+
+    def __repr__(self):
+        return f"<Habit(id={self.id}, user_id={self.user_id}, name='{self.name}', mode='{self.mode}')>"
+
+
+class HabitLog(Base):
+    """
+    长期行为打卡日志模型
+    记录用户某个行为在某天的打卡情况
+    """
+
+    __tablename__ = "habit_logs"
+    __table_args__ = (
+        UniqueConstraint("habit_id", "log_date", name="uq_habit_logs_habit_day"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    habit_id = Column(Integer, ForeignKey("habits.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+
+    log_date = Column(Date, nullable=False, index=True, comment="打卡日期")
+    value = Column(Integer, nullable=True, comment="计量值")
+    completed = Column(Boolean, default=False, comment="是否完成")
+    note = Column(Text, nullable=True, comment="备注")
+    created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")
+
+    def __repr__(self):
+        return f"<HabitLog(id={self.id}, habit_id={self.habit_id}, date={self.log_date}, completed={self.completed})>"

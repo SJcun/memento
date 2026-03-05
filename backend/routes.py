@@ -13,7 +13,7 @@ except Exception:  # pragma: no cover
     ZoneInfo = None
     ZoneInfoNotFoundError = Exception
 
-from fastapi import APIRouter, Depends, Form, UploadFile, File, HTTPException, status
+from fastapi import APIRouter, Depends, Form, UploadFile, File, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -157,6 +157,19 @@ def _serialize_habit(habit: Habit) -> Dict[str, Any]:
         "created_at": habit.created_at.isoformat() if habit.created_at else None,
     }
 
+
+
+def _habit_initial_from_tag_or_name(tag: Optional[str], habit_name: Optional[str]) -> str:
+    """按“标签首字 > 名称首字 > 打”生成日历圆球字符。"""
+    tag_text = (tag or "").strip()
+    if tag_text:
+        return tag_text[0]
+
+    name_text = (habit_name or "").strip()
+    if name_text:
+        return name_text[0]
+
+    return "打"
 
 def _serialize_habit_log(log: HabitLog, habit: Optional[Habit] = None) -> Dict[str, Any]:
     """序列化 HabitLog 模型为 API 响应。"""
@@ -1525,6 +1538,76 @@ async def get_today_habits(
 
     return result
 
+
+
+@router.get("/habits/logs/monthly")
+async def get_habit_logs_monthly(
+    year: int = Query(..., ge=1970, le=2100),
+    month: int = Query(..., ge=1, le=12),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """按月返回打卡日志摘要（用于日历标记展示）。"""
+    month_start = date(year, month, 1)
+    if month == 12:
+        month_end = date(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        month_end = date(year, month + 1, 1) - timedelta(days=1)
+
+    logs = db.query(HabitLog).filter(
+        HabitLog.user_id == current_user.id,
+        HabitLog.log_date >= month_start,
+        HabitLog.log_date <= month_end,
+    ).order_by(HabitLog.log_date.asc(), HabitLog.created_at.asc(), HabitLog.id.asc()).all()
+
+    if not logs:
+        return {
+            "year": year,
+            "month": month,
+            "days": {},
+        }
+
+    habit_ids = {log.habit_id for log in logs}
+    habits = db.query(Habit).filter(
+        Habit.user_id == current_user.id,
+        Habit.id.in_(habit_ids),
+    ).all()
+    habit_map = {habit.id: habit for habit in habits}
+
+    days: Dict[str, Dict[str, Any]] = {}
+    for log in logs:
+        habit = habit_map.get(log.habit_id)
+        habit_name = habit.name if habit is not None else f"行为 #{log.habit_id}"
+        tags = _json_list(habit.tags) if habit is not None else []
+        first_tag = None
+        for raw_tag in tags:
+            if isinstance(raw_tag, str) and raw_tag.strip():
+                first_tag = raw_tag.strip()
+                break
+
+        day_key = log.log_date.isoformat()
+        item = {
+            "habit_id": log.habit_id,
+            "habit_name": habit_name,
+            "tag": first_tag,
+            "initial": _habit_initial_from_tag_or_name(first_tag, habit_name),
+            "completed": bool(log.completed),
+        }
+
+        if day_key not in days:
+            days[day_key] = {
+                "count": 0,
+                "items": [],
+            }
+
+        days[day_key]["items"].append(item)
+        days[day_key]["count"] += 1
+
+    return {
+        "year": year,
+        "month": month,
+        "days": days,
+    }
 
 @router.get("/habits/logs/{log_date}")
 async def get_habit_logs_by_date(

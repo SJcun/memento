@@ -173,6 +173,13 @@ const fetchHabitLogsByDate = async (logDate) => {
     return res.data;
 }
 
+const fetchHabitLogsByMonth = async (year, month) => {
+    const res = await api.get('/habits/logs/monthly', {
+      params: { year, month }
+    });
+    return res.data;
+}
+
 // --- 鍔ㄦ€佸姞杞藉鍑哄簱 ---
 const loadScript = (src) => {
   return new Promise((resolve, reject) => {
@@ -410,6 +417,8 @@ export default function Dashboard({ userConfig, onLogout }) {
   // 日历相关
   const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
   const [calendarView, setCalendarView] = useState({ year: new Date().getFullYear(), month: new Date().getMonth() });
+  const [calendarHabitMarksByMonth, setCalendarHabitMarksByMonth] = useState({});
+  const [isCalendarHabitMarksLoading, setIsCalendarHabitMarksLoading] = useState(false);
   const [heatmapYear, setHeatmapYear] = useState(new Date().getFullYear());
   const quickInstantTags = ['运动', '学习', '工作', '家务', '社交'];
   const quickHabitTags = ['健康', '学习', '工作', '家庭', '成长'];
@@ -423,6 +432,15 @@ export default function Dashboard({ userConfig, onLogout }) {
     { value: 6, label: '日' }
   ];
   const todayDateKey = formatDate(new Date());
+
+  const currentCalendarMonthKey = useMemo(() => {
+    return `${calendarView.year}-${String(calendarView.month + 1).padStart(2, '0')}`;
+  }, [calendarView.year, calendarView.month]);
+
+  const currentCalendarHabitMarks = useMemo(() => {
+    const marks = calendarHabitMarksByMonth[currentCalendarMonthKey];
+    return marks && typeof marks === 'object' ? marks : {};
+  }, [calendarHabitMarksByMonth, currentCalendarMonthKey]);
 
   // 杈呭姪鍑芥暟锛氳绠楃粰瀹氱洰鏍囨棩鏈熸椂鐨勫勾榫勶紙瀹屾暣骞存暟锛?
   const getAgeAtDate = (targetDate) => {
@@ -1587,6 +1605,43 @@ export default function Dashboard({ userConfig, onLogout }) {
       })
       .finally(() => setIsLoadingHabitLogs(false));
   }, [isEditModalOpen, selectedDate?.dateKey]);
+
+  // 放大日历打开并切换月份时，按月拉取打卡圆球数据（仅拉一次并缓存）
+  useEffect(() => {
+    if (!isCalendarModalOpen) return;
+
+    const monthKey = `${calendarView.year}-${String(calendarView.month + 1).padStart(2, '0')}`;
+    if (calendarHabitMarksByMonth[monthKey]) return;
+
+    let cancelled = false;
+    setIsCalendarHabitMarksLoading(true);
+
+    fetchHabitLogsByMonth(calendarView.year, calendarView.month + 1)
+      .then(data => {
+        if (cancelled) return;
+        const days = data && typeof data.days === 'object' ? data.days : {};
+        setCalendarHabitMarksByMonth(prev => ({ ...prev, [monthKey]: days }));
+      })
+      .catch(err => {
+        console.error('加载日历打卡标记失败', err);
+        if (cancelled) return;
+        setCalendarHabitMarksByMonth(prev => ({ ...prev, [monthKey]: {} }));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsCalendarHabitMarksLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isCalendarModalOpen,
+    calendarView.year,
+    calendarView.month,
+    calendarHabitMarksByMonth,
+  ]);
 
   const handleSaveEvent = async () => {
     if (!["joy", "neutral", "hard"].includes(tempEvent.mood)) {
@@ -4123,11 +4178,15 @@ export default function Dashboard({ userConfig, onLogout }) {
 
                                 const isToday = date.toDateString() === new Date().toDateString();
 
+                                const dayHabitMarks = currentCalendarHabitMarks[dateStr]?.items;
+                                const normalizedHabitMarks = Array.isArray(dayHabitMarks) ? dayHabitMarks : [];
+
                                 days.push({
                                     day: d,
                                     isCurrentMonth: true,
                                     date: dateStr,
                                     events: dayEvents,
+                                    habitMarks: normalizedHabitMarks,
                                     isToday
                                 });
                             }
@@ -4154,6 +4213,19 @@ export default function Dashboard({ userConfig, onLogout }) {
                                                         {event.title}
                                                     </div>
                                                 ))}
+                                                {Array.isArray(dayInfo.habitMarks) && dayInfo.habitMarks.length > 0 && (
+                                                    <div className="flex flex-wrap gap-1 pt-0.5">
+                                                        {dayInfo.habitMarks.map((mark, markIndex) => (
+                                                            <span
+                                                                key={`${dayInfo.date}-habit-${mark.habit_id}-${markIndex}`}
+                                                                className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500/80 text-[10px] font-semibold text-white ring-1 ring-emerald-300/40"
+                                                                title={`${mark.habit_name || `行为 #${mark.habit_id}`}${mark.tag ? ` · #${mark.tag}` : ''} · ${mark.completed ? '已完成' : '未完成'}`}
+                                                            >
+                                                                {mark.initial || '打'}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                )}
                                             </div>
                                         </>
                                     )}
@@ -4164,7 +4236,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                 </div>
 
                 {/* 图例 */}
-                <div className="flex gap-4 text-sm text-neutral-400">
+                <div className="flex flex-wrap items-center gap-4 text-sm text-neutral-400">
                     <div className="flex items-center gap-2">
                         <div className="w-3 h-3 rounded-sm bg-blue-500/30"></div>
                         <span>纪念日</span>
@@ -4177,6 +4249,13 @@ export default function Dashboard({ userConfig, onLogout }) {
                         <div className="w-6 h-6 rounded-full bg-yellow-500"></div>
                         <span>今天</span>
                     </div>
+                    <div className="flex items-center gap-2">
+                        <div className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500/80 text-[10px] font-semibold text-white">标</div>
+                        <span>打卡（标签首字）</span>
+                    </div>
+                    {isCalendarHabitMarksLoading && (
+                        <span className="text-xs text-neutral-500">打卡标记加载中…</span>
+                    )}
                 </div>
             </div>
         </Modal>

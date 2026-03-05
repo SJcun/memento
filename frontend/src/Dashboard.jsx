@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Clock, Moon, Calendar, CalendarDays, Heart, Smile, Frown, Plus, X, Save, Trash2,
-  MoreHorizontal, Info, ChevronLeft, ChevronRight, CheckCircle2, Circle,
+  MoreHorizontal, Info, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, CheckCircle2, Circle,
   Target, Image as ImageIcon, Upload, Link as LinkIcon, LayoutGrid,
   Download, FileText, Maximize2, LogOut, UserPlus, Zap
 } from 'lucide-react';
@@ -46,7 +46,7 @@ const saveEventToBackend = async (entryDate, data) => {
   formData.append('entry_date', entryDate);
   if (data.title) formData.append('title', data.title);
   if (data.content) formData.append('content', data.content);
-  if (data.mood) formData.append('mood', data.mood);
+  if (['joy', 'neutral', 'hard'].includes(data.mood)) formData.append('mood', data.mood);
 
   // 上传多个图片文件
   if (data.imageFiles && data.imageFiles.length > 0) {
@@ -334,6 +334,16 @@ export default function Dashboard({ userConfig, onLogout }) {
   const [isSavingInstantAction, setIsSavingInstantAction] = useState(false);
   const [instantActionForm, setInstantActionForm] = useState({ content: '', tags: [], tagInput: '' });
   const [todayInstantTagFilter, setTodayInstantTagFilter] = useState('全部');
+  const [rightPanelCollapsed, setRightPanelCollapsed] = useState({
+    photoWall: true,
+    goals: true,
+    instantActions: true,
+    todayHabits: true,
+  });
+
+  const toggleRightPanelSection = (sectionKey) => {
+    setRightPanelCollapsed(prev => ({ ...prev, [sectionKey]: !prev[sectionKey] }));
+  };
 
   // 长期行为打卡相关
   const [isHabitModalOpen, setIsHabitModalOpen] = useState(false);
@@ -437,7 +447,7 @@ export default function Dashboard({ userConfig, onLogout }) {
   const [exportRange, setExportRange] = useState({ start: '', end: '' });
 
   // 涓存椂鐘舵€?
-  const [tempEvent, setTempEvent] = useState({ title: '', content: '', mood: 'neutral', city: null, images: [], imagesOriginal: [], imageFiles: [] });
+  const [tempEvent, setTempEvent] = useState({ title: '', content: '', mood: '', city: null, images: [], imagesOriginal: [], imageFiles: [] });
   const [tempGoal, setTempGoal] = useState('');
   const [dobYear, setDobYear] = useState(new Date().getFullYear() - 25); // 榛樿25宀?
   const [dobMonth, setDobMonth] = useState(1); // 1-12
@@ -591,6 +601,18 @@ export default function Dashboard({ userConfig, onLogout }) {
        hoursSlept: (diffInDays(new Date(), new Date(config.dob)) * 8).toLocaleString()
     };
   }, [config]);
+
+  const lifeProgressPercent = useMemo(() => {
+    const raw = Number.parseFloat(stats?.progress ?? '0');
+    if (!Number.isFinite(raw)) return 0;
+    return Math.max(0, Math.min(100, raw));
+  }, [stats?.progress]);
+
+  const lifeProgressDotPercent = useMemo(() => {
+    if (lifeProgressPercent <= 0) return 0.8;
+    if (lifeProgressPercent >= 100) return 99.2;
+    return lifeProgressPercent;
+  }, [lifeProgressPercent]);
 
   const galleryImages = useMemo(() => {
     const imagesList = [];
@@ -798,25 +820,47 @@ export default function Dashboard({ userConfig, onLogout }) {
     const maxMoodValue = 3;
     const pointCount = data.length;
     const safeDivisor = Math.max(pointCount - 1, 1);
-    const barWidth = Math.max(1.5, Math.min(5, (plotWidth / Math.max(pointCount, 1)) * 0.72));
 
     const getX = (index) => margin.left + (index / safeDivisor) * plotWidth;
     const getY = (moodValue) => margin.top + ((maxMoodValue - moodValue) / maxMoodValue) * plotHeight;
 
-    const linePoints = data.map((point, index) => `${getX(index)},${getY(point.moodValue)}`).join(' ');
-    const bars = data.map((point, index) => {
-      const x = getX(index) - barWidth / 2;
-      const y = getY(point.moodValue);
-      const height = Math.max(1, getY(0) - y);
-      return {
-        key: point.dateKey,
-        x,
-        width: barWidth,
-        y,
-        height,
-        color: moodColorByValue[point.moodValue] || moodColorByValue[0],
-      };
-    });
+    const points = data.map((point, index) => ({
+      x: getX(index),
+      y: getY(point.moodValue),
+      key: point.dateKey,
+    }));
+
+    const buildSmoothPath = (pathPoints) => {
+      if (pathPoints.length === 0) return '';
+      if (pathPoints.length === 1) return `M ${pathPoints[0].x} ${pathPoints[0].y}`;
+      if (pathPoints.length === 2) {
+        return `M ${pathPoints[0].x} ${pathPoints[0].y} L ${pathPoints[1].x} ${pathPoints[1].y}`;
+      }
+
+      const tension = 0.2;
+      let d = `M ${pathPoints[0].x} ${pathPoints[0].y}`;
+      for (let i = 0; i < pathPoints.length - 1; i += 1) {
+        const p0 = i === 0 ? pathPoints[0] : pathPoints[i - 1];
+        const p1 = pathPoints[i];
+        const p2 = pathPoints[i + 1];
+        const p3 = i + 2 < pathPoints.length ? pathPoints[i + 2] : p2;
+
+        const cp1x = p1.x + (p2.x - p0.x) * tension;
+        const cp1y = p1.y + (p2.y - p0.y) * tension;
+        const cp2x = p2.x - (p3.x - p1.x) * tension;
+        const cp2y = p2.y - (p3.y - p1.y) * tension;
+
+        d += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${p2.x} ${p2.y}`;
+      }
+
+      return d;
+    };
+
+    const trendPath = buildSmoothPath(points);
+    const baselineY = getY(0);
+    const areaPath = points.length > 0
+      ? `${trendPath} L ${points[points.length - 1].x} ${baselineY} L ${points[0].x} ${baselineY} Z`
+      : '';
 
     const tickIndices = pointCount > 0
       ? Array.from(new Set([
@@ -834,10 +878,10 @@ export default function Dashboard({ userConfig, onLogout }) {
       chartHeight,
       margin,
       plotHeight,
-      linePoints,
-      bars,
       tickIndices,
       pointCount,
+      areaPath,
+      trendPath,
       getX,
       getY,
     };
@@ -1016,6 +1060,10 @@ export default function Dashboard({ userConfig, onLogout }) {
     if (todayInstantTagFilter === '全部') return todayInstantActions;
     return todayInstantActions.filter(item => Array.isArray(item?.tags) && item.tags.includes(todayInstantTagFilter));
   }, [todayInstantActions, todayInstantTagFilter]);
+
+  const activeGoalCount = useMemo(() => filteredGoals.filter(g => !g.completed).length, [filteredGoals]);
+
+  const completedTodayHabitCount = useMemo(() => todayHabits.filter(habit => habit.today?.completed).length, [todayHabits]);
 
   useEffect(() => {
     if (!todayInstantActionTags.includes(todayInstantTagFilter)) {
@@ -1412,7 +1460,7 @@ export default function Dashboard({ userConfig, onLogout }) {
       return;
     }
 
-    const existing = events[dateKey] || { title: '', content: '', mood: 'neutral', city: null, image: '', imageOriginal: '', images: [], imagesOriginal: [] };
+    const existing = events[dateKey] || { title: '', content: '', mood: '', city: null, image: '', imageOriginal: '', images: [], imagesOriginal: [] };
     setSelectedDate({ dateKey, date: new Date(`${dateKey}T00:00:00`) });
 
     // 澶勭悊鍚戝悗鍏煎锛氬鏋滃彧鏈夊崟涓浘鐗囧瓧娈碉紝杞崲涓烘暟缁?
@@ -1422,7 +1470,7 @@ export default function Dashboard({ userConfig, onLogout }) {
     setTempEvent({
       title: existing.title || '',
       content: existing.content || '',
-      mood: existing.mood || 'neutral',
+      mood: existing.mood || '',
       city: existing.city || null,
       images,
       imagesOriginal,
@@ -1541,6 +1589,11 @@ export default function Dashboard({ userConfig, onLogout }) {
   }, [isEditModalOpen, selectedDate?.dateKey]);
 
   const handleSaveEvent = async () => {
+    if (!["joy", "neutral", "hard"].includes(tempEvent.mood)) {
+      alert('请选择心情后再保存');
+      return;
+    }
+
     if (selectedDate) {
       try {
         // 调用后端 API 保存
@@ -2175,7 +2228,23 @@ export default function Dashboard({ userConfig, onLogout }) {
            <Card className="p-3 sm:p-6"><div className="text-xs text-neutral-400">人生时钟</div><div className="text-xl sm:text-3xl font-bold">{stats?.time || '--:--'}</div></Card>
           <Card className="p-3 sm:p-6"><div className="text-xs text-neutral-400">出生天数</div><div className="text-xl sm:text-3xl font-bold">{stats?.daysLived || '--'}</div></Card>
           <Card className="p-3 sm:p-6"><div className="text-xs text-neutral-400">年龄</div><div className="text-xl sm:text-3xl font-bold">{stats?.yearsLived || '--'}</div></Card>
-           <Card className="p-3 sm:p-6"><div className="text-xs text-neutral-400">人生进度</div><div className="text-xl sm:text-3xl font-bold">{stats?.progress || '--'}%</div></Card>
+           <Card className="p-3 sm:p-6">
+            <div className="text-xs text-neutral-400">人生进度</div>
+            <div className="text-xl sm:text-3xl font-bold">{stats?.progress || '--'}%</div>
+            <div className="mt-3">
+              <div className="relative h-2">
+                <div className="absolute inset-x-0 top-1/2 h-[2px] -translate-y-1/2 rounded-full bg-neutral-700/60" />
+                <div
+                  className="absolute left-0 top-1/2 h-[2px] -translate-y-1/2 rounded-full bg-gradient-to-r from-emerald-400 via-lime-300 to-amber-300 transition-all duration-500"
+                  style={{ width: `${lifeProgressPercent}%` }}
+                />
+                <div
+                  className="absolute top-1/2 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-neutral-900/80 bg-amber-300 shadow-[0_0_10px_rgba(252,211,77,0.55)] transition-all duration-500"
+                  style={{ left: `${lifeProgressDotPercent}%` }}
+                />
+              </div>
+            </div>
+          </Card>
         </section>
 
         {/* 涓荤綉鏍煎尯鍩?*/}
@@ -2219,7 +2288,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                 </div>
 
                 {/* Heatmap */}
-                <div className="bg-neutral-900/50 p-2 sm:p-4 rounded-lg border border-neutral-800 overflow-x-auto">
+                <div className="bg-neutral-900/50 p-2 sm:p-4 rounded-lg border border-neutral-800 overflow-x-auto heatmap-scrollbar">
                     <div className="flex gap-1 min-w-[760px]">
                     {heatmapWeeks.map((week, weekIndex) => (
                         <div key={weekIndex} className="flex flex-col gap-1">
@@ -2231,7 +2300,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                                         ${day.isToday && day.inYear ? 'ring-1 ring-yellow-400' : ''}
                                         ${!day.inYear ? 'bg-transparent border-transparent cursor-default' : ''}
                                         ${day.event
-                                          ? moodConfig[day.event.mood]?.color || 'bg-emerald-500 border-emerald-600'
+                                          ? (moodConfig[day.event.mood]?.color || 'bg-neutral-700 border-neutral-700')
                                           : (day.isFuture ? 'bg-neutral-900 border-neutral-800' : 'bg-neutral-700 border-neutral-700')}
                                         ${day.inYear ? (day.isFuture ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:brightness-110') : ''}
                                     `}
@@ -2353,12 +2422,12 @@ export default function Dashboard({ userConfig, onLogout }) {
                         <div className="xl:col-span-2 bg-neutral-900/50 border border-neutral-800 rounded-lg p-3">
                             <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
                                 <div>
-                                    <div className="text-sm font-semibold">本年情绪趋势（柱状 + 折线）</div>
+                                    <div className="text-sm font-semibold">本年情绪趋势（平滑曲线 + 面积）</div>
                                     <div className="text-[11px] text-neutral-500">X 轴：今年第几天，Y 轴：情绪值（0 未填 / 1 艰难 / 2 一般 / 3 开心）</div>
                                 </div>
                                 <div className="flex items-center gap-3 text-[11px] text-neutral-400">
-                                    <span className="flex items-center gap-1"><span className="w-3 h-1.5 rounded-sm bg-neutral-500 inline-block" />柱状</span>
-                                    <span className="flex items-center gap-1"><span className="w-3 h-[2px] rounded bg-sky-400 inline-block" />折线</span>
+                                    <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm bg-sky-400/20 border border-sky-400/30 inline-block" />面积</span>
+                                    <span className="flex items-center gap-1"><span className="w-3 h-[2px] rounded bg-sky-300 inline-block" />平滑曲线</span>
                                 </div>
                             </div>
                             <div
@@ -2381,6 +2450,13 @@ export default function Dashboard({ userConfig, onLogout }) {
                                     className="w-full h-56 sm:h-64"
                                     preserveAspectRatio="none"
                                 >
+                                                                        <defs>
+                                      <linearGradient id="moodTrendAreaGradient" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="0%" stopColor="rgba(125,211,252,0.34)" />
+                                        <stop offset="65%" stopColor="rgba(56,189,248,0.12)" />
+                                        <stop offset="100%" stopColor="rgba(56,189,248,0)" />
+                                      </linearGradient>
+                                    </defs>
                                     {[0, 1, 2, 3].map((level) => {
                                       const y = moodTrendChart.getY(level);
                                       return (
@@ -2390,8 +2466,8 @@ export default function Dashboard({ userConfig, onLogout }) {
                                             y1={y}
                                             x2={moodTrendChart.chartWidth - moodTrendChart.margin.right}
                                             y2={y}
-                                            stroke="rgba(115,115,115,0.35)"
-                                            strokeWidth="1"
+                                            stroke="rgba(163,163,163,0.12)"
+                                            strokeWidth="0.8"
                                           />
                                           <text
                                             x={moodTrendChart.margin.left - 8}
@@ -2416,7 +2492,7 @@ export default function Dashboard({ userConfig, onLogout }) {
                                             y1={moodTrendChart.chartHeight - moodTrendChart.margin.bottom}
                                             x2={x}
                                             y2={moodTrendChart.chartHeight - moodTrendChart.margin.bottom + 4}
-                                            stroke="rgba(115,115,115,0.6)"
+                                            stroke="rgba(148,163,184,0.42)"
                                             strokeWidth="1"
                                           />
                                           <text
@@ -2431,24 +2507,32 @@ export default function Dashboard({ userConfig, onLogout }) {
                                         </g>
                                       );
                                     })}
-                                    {moodTrendChart.bars.map((bar) => (
-                                      <rect
-                                        key={`bar-${bar.key}`}
-                                        x={bar.x}
-                                        y={bar.y}
-                                        width={Math.max(1, bar.width)}
-                                        height={bar.height}
-                                        fill={bar.color}
-                                        opacity={0.55}
+                                    {moodTrendChart.areaPath && (
+                                      <path
+                                        d={moodTrendChart.areaPath}
+                                        fill="url(#moodTrendAreaGradient)"
                                       />
-                                    ))}
-                                    <polyline
-                                        points={moodTrendChart.linePoints}
-                                        fill="none"
-                                        stroke="#38bdf8"
-                                        strokeWidth="2"
-                                    />
-                                    {hoveredTrendPoint && (
+                                    )}
+                                    {moodTrendChart.trendPath && (
+                                      <>
+                                        <path
+                                          d={moodTrendChart.trendPath}
+                                          fill="none"
+                                          stroke="rgba(125,211,252,0.18)"
+                                          strokeWidth="5"
+                                          strokeLinecap="round"
+                                          strokeLinejoin="round"
+                                        />
+                                        <path
+                                          d={moodTrendChart.trendPath}
+                                          fill="none"
+                                          stroke="#7dd3fc"
+                                          strokeWidth="2.2"
+                                          strokeLinecap="round"
+                                          strokeLinejoin="round"
+                                        />
+                                      </>
+                                    )}{hoveredTrendPoint && (
                                       <g>
                                         <line
                                           x1={moodTrendChart.getX(moodTrendHover.index)}
@@ -2543,249 +2627,317 @@ export default function Dashboard({ userConfig, onLogout }) {
             </div>
 
             {/* 渚ц竟鏍?*/}
-            <div className="lg:col-span-4 space-y-6">
+            <div className="lg:col-span-4 flex flex-col gap-6">
                  {/* 今日即刻行动 */}
-                 <Card className="p-4 sm:p-5">
+                 <Card className="order-4 p-4 sm:p-5">
                     <div className="flex items-center justify-between mb-3">
                         <h3 className="font-bold flex items-center gap-2"><Zap size={18}/> 今日即刻行动</h3>
-                        <span className="text-xs text-neutral-500">{todayInstantActions.length} 条</span>
-                    </div>
-                    {todayInstantActionTags.length > 1 && (
-                        <div className="flex flex-wrap gap-1 mb-3">
-                            {todayInstantActionTags.map(tag => (
-                                <button
-                                    key={tag}
-                                    onClick={() => setTodayInstantTagFilter(tag)}
-                                    className={`px-2 py-1 rounded text-xs border ${
-                                      todayInstantTagFilter === tag
-                                        ? 'bg-white text-black border-white'
-                                        : 'border-neutral-700 text-neutral-300 hover:bg-neutral-800'
-                                    }`}
-                                >
-                                    {tag}
-                                </button>
-                            ))}
+                        <div className="flex items-center gap-2">
+                            <span className="text-xs text-neutral-500">{todayInstantActions.length} 条</span>
+                            <button
+                                type="button"
+                                onClick={() => toggleRightPanelSection('instantActions')}
+                                className="p-1 rounded border border-neutral-700 text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors"
+                                title={rightPanelCollapsed.instantActions ? '展开' : '收起'}
+                            >
+                                {rightPanelCollapsed.instantActions ? <ChevronDown size={14}/> : <ChevronUp size={14}/>}
+                            </button>
                         </div>
-                    )}
-                    {filteredTodayInstantActions.length === 0 ? (
-                        <div className="rounded-lg border border-dashed border-neutral-700 bg-neutral-900/40 px-3 py-6 text-center text-sm text-neutral-500">
-                            今天还没有即刻行动
+                    </div>
+                    {rightPanelCollapsed.instantActions ? (
+                        <div className="rounded-lg border border-neutral-700/80 bg-neutral-900/30 px-3 py-3 text-xs text-neutral-400">
+                            已折叠，今天共 {todayInstantActions.length} 条即刻行动
                         </div>
                     ) : (
-                        <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar">
-                            {filteredTodayInstantActions.map(action => (
-                                <div key={action.id} className="rounded-lg border border-neutral-700 bg-neutral-900/50 p-2">
-                                    <div className="flex items-start gap-2">
-                                        <div className="text-xs text-neutral-400 mt-0.5 shrink-0">{formatTimeLabel(action.created_at)}</div>
-                                        <div className="text-sm text-neutral-100 flex-1">{action.content}</div>
+                        <>
+                            {todayInstantActionTags.length > 1 && (
+                                <div className="flex flex-wrap gap-1 mb-3">
+                                    {todayInstantActionTags.map(tag => (
                                         <button
-                                            onClick={() => handleDeleteInstantAction(todayDateKey, action.id)}
-                                            className="text-neutral-500 hover:text-red-400"
-                                            title="删除"
+                                            key={tag}
+                                            onClick={() => setTodayInstantTagFilter(tag)}
+                                            className={`px-2 py-1 rounded text-xs border ${
+                                              todayInstantTagFilter === tag
+                                                ? 'bg-white text-black border-white'
+                                                : 'border-neutral-700 text-neutral-300 hover:bg-neutral-800'
+                                            }`}
                                         >
-                                            <Trash2 size={14}/>
+                                            {tag}
                                         </button>
-                                    </div>
-                                    {Array.isArray(action.tags) && action.tags.length > 0 && (
-                                        <div className="mt-2 flex flex-wrap gap-1">
-                                            {action.tags.map(tag => (
-                                                <span key={`${action.id}-${tag}`} className="px-2 py-0.5 rounded bg-neutral-800 text-[11px] text-neutral-300">
-                                                    #{tag}
-                                                </span>
-                                            ))}
-                                        </div>
-                                    )}
+                                    ))}
                                 </div>
-                            ))}
-                        </div>
+                            )}
+                            {filteredTodayInstantActions.length === 0 ? (
+                                <div className="rounded-lg border border-dashed border-neutral-700 bg-neutral-900/40 px-3 py-6 text-center text-sm text-neutral-500">
+                                    今天还没有即刻行动
+                                </div>
+                            ) : (
+                                <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar">
+                                    {filteredTodayInstantActions.map(action => (
+                                        <div key={action.id} className="rounded-lg border border-neutral-700 bg-neutral-900/50 p-2">
+                                            <div className="flex items-start gap-2">
+                                                <div className="text-xs text-neutral-400 mt-0.5 shrink-0">{formatTimeLabel(action.created_at)}</div>
+                                                <div className="text-sm text-neutral-100 flex-1">{action.content}</div>
+                                                <button
+                                                    onClick={() => handleDeleteInstantAction(todayDateKey, action.id)}
+                                                    className="text-neutral-500 hover:text-red-400"
+                                                    title="删除"
+                                                >
+                                                    <Trash2 size={14}/>
+                                                </button>
+                                            </div>
+                                            {Array.isArray(action.tags) && action.tags.length > 0 && (
+                                                <div className="mt-2 flex flex-wrap gap-1">
+                                                    {action.tags.map(tag => (
+                                                        <span key={`${action.id}-${tag}`} className="px-2 py-0.5 rounded bg-neutral-800 text-[11px] text-neutral-300">
+                                                            #{tag}
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </>
                     )}
                  </Card>
-
                  {/* 今日打卡 */}
-                 <Card className="p-4 sm:p-5">
+                 <Card className="order-5 p-4 sm:p-5">
                     <div className="flex items-center justify-between mb-3">
                         <h3 className="font-bold flex items-center gap-2"><CheckCircle2 size={18}/> 今日打卡</h3>
-                        <button
-                            onClick={() => setIsHabitModalOpen(true)}
-                            className="text-xs px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700"
-                        >
-                            新建
-                        </button>
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={() => setIsHabitModalOpen(true)}
+                                className="text-xs px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700"
+                            >
+                                新建
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => toggleRightPanelSection('todayHabits')}
+                                className="p-1 rounded border border-neutral-700 text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors"
+                                title={rightPanelCollapsed.todayHabits ? '展开' : '收起'}
+                            >
+                                {rightPanelCollapsed.todayHabits ? <ChevronDown size={14}/> : <ChevronUp size={14}/>}
+                            </button>
+                        </div>
                     </div>
-                    {todayHabits.length === 0 ? (
-                        <div className="rounded-lg border border-dashed border-neutral-700 bg-neutral-900/40 px-3 py-6 text-center text-sm text-neutral-500">
-                            暂无长期行为，先创建一个吧
+                    {rightPanelCollapsed.todayHabits ? (
+                        <div className="rounded-lg border border-neutral-700/80 bg-neutral-900/30 px-3 py-3 text-xs text-neutral-400">
+                            已折叠，已完成 {completedTodayHabitCount}/{todayHabits.length} 项
                         </div>
                     ) : (
-                        <div className="space-y-2 max-h-72 overflow-y-auto custom-scrollbar">
-                            {todayHabits.map(habit => (
-                                <div key={habit.id} className="rounded-lg border border-neutral-700 bg-neutral-900/50 p-2">
-                                    <div className="flex items-start justify-between gap-2">
-                                        <div className="min-w-0">
-                                            <div className="text-sm font-medium text-neutral-100 truncate">{habit.name}</div>
-                                            <div className="text-xs text-neutral-400">
-                                                连续 {habit.streak_days || 0} 天 · 累计 {habit.total_completed || 0} 次
-                                            </div>
-                                        </div>
-                                        {habit.today?.completed ? (
-                                            <span className="text-xs px-2 py-0.5 rounded bg-green-500/20 text-green-300 border border-green-500/30">已完成</span>
-                                        ) : (
-                                            <span className="text-xs px-2 py-0.5 rounded bg-neutral-800 text-neutral-400 border border-neutral-700">未完成</span>
-                                        )}
-                                    </div>
-                                    {Array.isArray(habit.tags) && habit.tags.length > 0 && (
-                                        <div className="mt-1 flex flex-wrap gap-1">
-                                            {habit.tags.map(tag => (
-                                                <span key={`${habit.id}-${tag}`} className="px-2 py-0.5 rounded bg-neutral-800 text-[11px] text-neutral-300">#{tag}</span>
-                                            ))}
-                                        </div>
-                                    )}
-
-                                    <div className="mt-2">
-                                        {habit.mode === 'quantity' ? (
-                                            <div className="flex gap-2 items-center">
-                                                <input
-                                                    type="number"
-                                                    min="0"
-                                                    value={habitValueDrafts[habit.id] ?? habit.today?.value ?? ''}
-                                                    onChange={e => setHabitValueDrafts({ ...habitValueDrafts, [habit.id]: e.target.value })}
-                                                    placeholder={`目标 ${habit.target_value ?? '-'} ${habit.unit || ''}`}
-                                                    className="flex-1 bg-black border border-neutral-700 rounded px-2 py-1 text-sm text-white"
-                                                />
-                                                <button
-                                                    onClick={() => handleHabitCheckin(habit)}
-                                                    className="px-3 py-1 rounded bg-white text-black text-sm font-medium hover:bg-neutral-200"
-                                                >
-                                                    提交
-                                                </button>
-                                                {habit.today && (
-                                                    <button
-                                                        onClick={() => handleHabitUndoToday(habit.id)}
-                                                        className="px-2 py-1 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800"
-                                                    >
-                                                        撤销
-                                                    </button>
-                                                )}
-                                            </div>
-                                        ) : (
-                                            <div className="flex gap-2">
-                                                {!habit.today?.completed ? (
-                                                    <button
-                                                        onClick={() => handleHabitCheckin(habit)}
-                                                        className="px-3 py-1 rounded bg-white text-black text-sm font-medium hover:bg-neutral-200"
-                                                    >
-                                                        打卡
-                                                    </button>
-                                                ) : (
-                                                    <button
-                                                        onClick={() => handleHabitUndoToday(habit.id)}
-                                                        className="px-3 py-1 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800"
-                                                    >
-                                                        撤销
-                                                    </button>
-                                                )}
-                                            </div>
-                                        )}
-                                    </div>
-                                    <div className="mt-2 flex justify-end">
-                                        <button
-                                            onClick={() => handleFinishHabit(habit.id, habit.name)}
-                                            className="px-2 py-1 rounded border border-emerald-700/60 text-xs text-emerald-300 hover:bg-emerald-900/20"
-                                            title="结束该打卡行为（保留历史记录）"
-                                        >
-                                            完成行为
-                                        </button>
-                                    </div>
+                        <>
+                            {todayHabits.length === 0 ? (
+                                <div className="rounded-lg border border-dashed border-neutral-700 bg-neutral-900/40 px-3 py-6 text-center text-sm text-neutral-500">
+                                    暂无长期行为，先创建一个吧
                                 </div>
-                            ))}
-                        </div>
+                            ) : (
+                                <div className="space-y-2 max-h-72 overflow-y-auto custom-scrollbar">
+                                    {todayHabits.map(habit => (
+                                        <div key={habit.id} className="rounded-lg border border-neutral-700 bg-neutral-900/50 p-2">
+                                            <div className="flex items-start justify-between gap-2">
+                                                <div className="min-w-0">
+                                                    <div className="text-sm font-medium text-neutral-100 truncate">{habit.name}</div>
+                                                    <div className="text-xs text-neutral-400">
+                                                        连续 {habit.streak_days || 0} 天 · 累计 {habit.total_completed || 0} 次
+                                                    </div>
+                                                </div>
+                                                {habit.today?.completed ? (
+                                                    <span className="text-xs px-2 py-0.5 rounded bg-green-500/20 text-green-300 border border-green-500/30">已完成</span>
+                                                ) : (
+                                                    <span className="text-xs px-2 py-0.5 rounded bg-neutral-800 text-neutral-400 border border-neutral-700">未完成</span>
+                                                )}
+                                            </div>
+                                            {Array.isArray(habit.tags) && habit.tags.length > 0 && (
+                                                <div className="mt-1 flex flex-wrap gap-1">
+                                                    {habit.tags.map(tag => (
+                                                        <span key={`${habit.id}-${tag}`} className="px-2 py-0.5 rounded bg-neutral-800 text-[11px] text-neutral-300">#{tag}</span>
+                                                    ))}
+                                                </div>
+                                            )}
+
+                                            <div className="mt-2">
+                                                {habit.mode === 'quantity' ? (
+                                                    <div className="flex gap-2 items-center">
+                                                        <input
+                                                            type="number"
+                                                            min="0"
+                                                            value={habitValueDrafts[habit.id] ?? habit.today?.value ?? ''}
+                                                            onChange={e => setHabitValueDrafts({ ...habitValueDrafts, [habit.id]: e.target.value })}
+                                                            placeholder={`目标 ${habit.target_value ?? '-'} ${habit.unit || ''}`}
+                                                            className="flex-1 bg-black border border-neutral-700 rounded px-2 py-1 text-sm text-white"
+                                                        />
+                                                        <button
+                                                            onClick={() => handleHabitCheckin(habit)}
+                                                            className="px-3 py-1 rounded bg-white text-black text-sm font-medium hover:bg-neutral-200"
+                                                        >
+                                                            提交
+                                                        </button>
+                                                        {habit.today && (
+                                                            <button
+                                                                onClick={() => handleHabitUndoToday(habit.id)}
+                                                                className="px-2 py-1 rounded border border-neutral-700 text-xs text-neutral-300 hover:bg-neutral-800"
+                                                            >
+                                                                撤销
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                ) : (
+                                                    <div className="flex gap-2">
+                                                        {!habit.today?.completed ? (
+                                                            <button
+                                                                onClick={() => handleHabitCheckin(habit)}
+                                                                className="px-3 py-1 rounded bg-white text-black text-sm font-medium hover:bg-neutral-200"
+                                                            >
+                                                                打卡
+                                                            </button>
+                                                        ) : (
+                                                            <button
+                                                                onClick={() => handleHabitUndoToday(habit.id)}
+                                                                className="px-3 py-1 rounded border border-neutral-700 text-sm text-neutral-300 hover:bg-neutral-800"
+                                                            >
+                                                                撤销
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="mt-2 flex justify-end">
+                                                <button
+                                                    onClick={() => handleFinishHabit(habit.id, habit.name)}
+                                                    className="px-2 py-1 rounded border border-emerald-700/60 text-xs text-emerald-300 hover:bg-emerald-900/20"
+                                                    title="结束该打卡行为（保留历史记录）"
+                                                >
+                                                    完成行为
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </>
                     )}
                  </Card>
-
                  {/* 目标清单 */}
-                 <Card>
-                    <h3 className="font-bold mb-4 flex items-center gap-2"><Target size={18}/> 目标清单</h3>
-                    <div className="flex gap-2 mb-4">
-                        <input value={tempGoal} onChange={e=>setTempGoal(e.target.value)} className="flex-1 bg-black border border-neutral-700 rounded px-2 text-sm text-white" placeholder="添加目标..." />
-                        <button onClick={handleAddGoal} className="bg-white text-black p-2 rounded hover:bg-neutral-200"><Plus size={16}/></button>
+                 <Card className="order-3">
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="font-bold flex items-center gap-2"><Target size={18}/> 目标清单</h3>
+                        <button
+                            type="button"
+                            onClick={() => toggleRightPanelSection('goals')}
+                            className="p-1 rounded border border-neutral-700 text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors"
+                            title={rightPanelCollapsed.goals ? '展开' : '收起'}
+                        >
+                            {rightPanelCollapsed.goals ? <ChevronDown size={14}/> : <ChevronUp size={14}/>}
+                        </button>
                     </div>
-                    <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
-                        {filteredGoals.map(g => (
-                            <div key={g.id} className="flex gap-2 items-center text-sm">
-                                <button onClick={() => handleGoalToggle(g.id)}>{g.completed ? <CheckCircle2 size={16} className="text-yellow-500"/> : <Circle size={16}/>}</button>
-                                <span className={g.completed ? "line-through text-neutral-500" : ""}>{g.text}</span>
-                                {g.completedAt && g.weekYear !== undefined && (
-                                    <span className="text-xs text-neutral-500 ml-1">(第{g.weekYear} 岁)</span>
-                                )}
-                                <button onClick={() => handleDeleteGoal(g.id)} className="ml-auto text-neutral-600 hover:text-red-500"><Trash2 size={14}/></button>
+                    {rightPanelCollapsed.goals ? (
+                        <div className="rounded-lg border border-neutral-700/80 bg-neutral-900/30 px-3 py-3 text-xs text-neutral-400">
+                            已折叠，未完成 {activeGoalCount} 项（共 {filteredGoals.length} 项）
+                        </div>
+                    ) : (
+                        <>
+                            <div className="flex gap-2 mb-4">
+                                <input value={tempGoal} onChange={e=>setTempGoal(e.target.value)} className="flex-1 bg-black border border-neutral-700 rounded px-2 text-sm text-white" placeholder="添加目标..." />
+                                <button onClick={handleAddGoal} className="bg-white text-black p-2 rounded hover:bg-neutral-200"><Plus size={16}/></button>
                             </div>
-                        ))}
-                    </div>
+                            <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
+                                {filteredGoals.map(g => (
+                                    <div key={g.id} className="flex gap-2 items-center text-sm">
+                                        <button onClick={() => handleGoalToggle(g.id)}>{g.completed ? <CheckCircle2 size={16} className="text-yellow-500"/> : <Circle size={16}/>}</button>
+                                        <span className={g.completed ? "line-through text-neutral-500" : ""}>{g.text}</span>
+                                        {g.completedAt && g.weekYear !== undefined && (
+                                            <span className="text-xs text-neutral-500 ml-1">(第{g.weekYear} 岁)</span>
+                                        )}
+                                        <button onClick={() => handleDeleteGoal(g.id)} className="ml-auto text-neutral-600 hover:text-red-500"><Trash2 size={14}/></button>
+                                    </div>
+                                ))}
+                            </div>
+                        </>
+                    )}
                  </Card>
-
                  {/* 最近照片墙 */}
-                 <Card className="p-4 sm:p-5">
+                 <Card className="order-2 p-4 sm:p-5">
                     <div className="flex items-center justify-between mb-3">
                         <h3 className="font-bold flex items-center gap-2"><ImageIcon size={18}/> 最近照片墙</h3>
-                        <button
-                            onClick={() => setIsGalleryOpen(true)}
-                            className="text-xs text-neutral-400 hover:text-white transition-colors"
-                        >
-                            查看全部
-                        </button>
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={() => setIsGalleryOpen(true)}
+                                className="text-xs text-neutral-400 hover:text-white transition-colors"
+                            >
+                                查看全部
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => toggleRightPanelSection('photoWall')}
+                                className="p-1 rounded border border-neutral-700 text-neutral-400 hover:text-white hover:bg-neutral-800 transition-colors"
+                                title={rightPanelCollapsed.photoWall ? '展开' : '收起'}
+                            >
+                                {rightPanelCollapsed.photoWall ? <ChevronDown size={14}/> : <ChevronUp size={14}/>}
+                            </button>
+                        </div>
                     </div>
-                    {recentPhotoWall.length === 0 ? (
-                        <div className="rounded-lg border border-dashed border-neutral-700 bg-neutral-900/40 px-3 py-8 text-center text-sm text-neutral-500">
-                            还没有照片，记录一天就会出现在这里
+                    {rightPanelCollapsed.photoWall ? (
+                        <div className="rounded-lg border border-neutral-700/80 bg-neutral-900/30 px-3 py-3 text-xs text-neutral-400">
+                            已折叠，最近照片 {recentPhotoWall.length} 张
                         </div>
                     ) : (
-                        <div className="relative">
-                            <div className="absolute -inset-3 bg-gradient-to-br from-white/[0.05] via-transparent to-yellow-400/[0.08] blur-2xl pointer-events-none" />
-                            <div className="relative grid grid-cols-3 gap-2">
-                                {Array.from({ length: 9 }).map((_, index) => {
-                                    const photo = recentPhotoWall[index];
-                                    if (!photo) {
-                                        return (
-                                            <div
-                                                key={`photo-empty-${index}`}
-                                                className="aspect-square rounded-lg border border-dashed border-neutral-700/80 bg-neutral-900/30 flex items-center justify-center text-[11px] text-neutral-600"
-                                            >
-                                                待记录
-                                            </div>
-                                        );
-                                    }
+                        <>
+                            {recentPhotoWall.length === 0 ? (
+                                <div className="rounded-lg border border-dashed border-neutral-700 bg-neutral-900/40 px-3 py-8 text-center text-sm text-neutral-500">
+                                    还没有照片，记录一天就会出现在这里
+                                </div>
+                            ) : (
+                                <div className="relative">
+                                    <div className="absolute -inset-3 bg-gradient-to-br from-white/[0.05] via-transparent to-yellow-400/[0.08] blur-2xl pointer-events-none" />
+                                    <div className="relative grid grid-cols-3 gap-2">
+                                        {Array.from({ length: 9 }).map((_, index) => {
+                                            const photo = recentPhotoWall[index];
+                                            if (!photo) {
+                                                return (
+                                                    <div
+                                                        key={`photo-empty-${index}`}
+                                                        className="aspect-square rounded-lg border border-dashed border-neutral-700/80 bg-neutral-900/30 flex items-center justify-center text-[11px] text-neutral-600"
+                                                    >
+                                                        待记录
+                                                    </div>
+                                                );
+                                            }
 
-                                    return (
-                                        <button
-                                            key={photo.id}
-                                            onClick={() => {
-                                                setPreviewImageSrc(photo.imageOriginal || photo.image);
-                                                setIsImagePreviewOpen(true);
-                                                setIsPreviewFullScreen(false);
-                                            }}
-                                            className="group relative aspect-square overflow-hidden rounded-lg border border-neutral-700/80 bg-neutral-900 hover:border-neutral-500 transition-all duration-200 hover:-translate-y-0.5"
-                                            title={photo.eventTitle || photo.dateKey}
-                                        >
-                                            <img
-                                                src={photo.image}
-                                                alt={photo.eventTitle || `最近照片 ${index + 1}`}
-                                                loading="lazy"
-                                                className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-                                            />
-                                            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                                            <div className="absolute left-1 right-1 bottom-1 text-[10px] text-neutral-200 truncate opacity-0 group-hover:opacity-100 transition-opacity">
-                                                {photo.dateKey}
-                                            </div>
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        </div>
+                                            return (
+                                                <button
+                                                    key={photo.id}
+                                                    onClick={() => {
+                                                        setPreviewImageSrc(photo.imageOriginal || photo.image);
+                                                        setIsImagePreviewOpen(true);
+                                                        setIsPreviewFullScreen(false);
+                                                    }}
+                                                    className="group relative aspect-square overflow-hidden rounded-lg border border-neutral-700/80 bg-neutral-900 hover:border-neutral-500 transition-all duration-200 hover:-translate-y-0.5"
+                                                    title={photo.eventTitle || photo.dateKey}
+                                                >
+                                                    <img
+                                                        src={photo.image}
+                                                        alt={photo.eventTitle || `最近照片 ${index + 1}`}
+                                                        loading="lazy"
+                                                        className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                                                    />
+                                                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                                                    <div className="absolute left-1 right-1 bottom-1 text-[10px] text-neutral-200 truncate opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        {photo.dateKey}
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+                        </>
                     )}
                  </Card>
-
                  {/* 日历 */}
-                 <Card className="cursor-pointer hover:border-neutral-600 transition-colors" onClick={() => setIsCalendarModalOpen(true)}>
+                 <Card className="order-1 cursor-pointer hover:border-neutral-600 transition-colors" onClick={() => setIsCalendarModalOpen(true)}>
                     <h3 className="font-bold mb-4 flex items-center gap-2"><CalendarDays size={18}/> 日历 <span className="text-xs text-neutral-500 font-normal ml-auto">点击放大</span></h3>
                     <div className="space-y-4">
                         {/* 当前年月 */}
@@ -4045,3 +4197,4 @@ export default function Dashboard({ userConfig, onLogout }) {
     </div>
   );
 }
+

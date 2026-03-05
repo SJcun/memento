@@ -482,7 +482,7 @@ async def save_event(
     entry_date: str = Form(..., description="记录日期（YYYY-MM-DD）"),
     title: str = Form(None, description="事件标题"),
     content: str = Form(None, description="事件内容"),
-    mood: str = Form("neutral", description="心情状态"),
+    mood: Optional[str] = Form(None, description="心情状态"),
     image: UploadFile = File(None, description="事件图片（单个，向后兼容）"),
     images: List[UploadFile] = File(None, description="事件图片列表（多张）"),
     keep_images: str = Form(None, description="要保留的现有图片URL列表（JSON字符串）"),
@@ -498,7 +498,7 @@ async def save_event(
         entry_date: 记录日期
         title: 事件标题（可选）
         content: 事件内容（可选）
-        mood: 心情状态（默认"neutral"）
+        mood: 心情状态（可选：joy/neutral/hard）
         image: 事件图片文件（可选）
         db: 数据库会话
         current_user: 当前用户
@@ -529,10 +529,17 @@ async def save_event(
         )
         db.add(event)
 
+    valid_moods = {"joy", "neutral", "hard"}
+    if mood is not None and mood not in valid_moods:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="心情状态无效"
+        )
+
     # 更新事件字段
     event.title = title
     event.content = content
-    event.mood = mood
+    event.mood = mood if mood in valid_moods else None
     event.updated_at = _beijing_today()
 
     # 处理图片上传（支持多张图片）
@@ -654,7 +661,7 @@ async def create_instant_action(
         event = Event(
             user_id=current_user.id,
             entry_date=target_date,
-            mood="neutral",
+            mood=None,
         )
         db.add(event)
         db.flush()

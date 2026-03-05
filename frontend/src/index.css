@@ -13,3 +13,26 @@
   background: #404040;
   border-radius: 3px;
 }
+/* 热力图横向滚动条：默认弱化，悬浮时更明显 */
+.heatmap-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(163, 163, 163, 0.18) transparent;
+}
+
+.heatmap-scrollbar::-webkit-scrollbar {
+  height: 6px;
+}
+
+.heatmap-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 9999px;
+}
+
+.heatmap-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(163, 163, 163, 0.16);
+  border-radius: 9999px;
+}
+
+.heatmap-scrollbar:hover::-webkit-scrollbar-thumb {
+  background: rgba(163, 163, 163, 0.42);
+}
